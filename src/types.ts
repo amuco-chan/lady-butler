@@ -1,0 +1,58 @@
+export type Category = '課題' | '授業' | '生活' | 'バイト' | '予定' | '買い物' | 'その他'
+export type Priority = '高' | '中' | '低'
+export type Status = '未着手' | '進行中' | '完了' | '保留'
+export type Progress = 0 | 25 | 50 | 75 | 100
+export type Page = 'home' | 'tasks' | 'chat' | 'diary' | 'assignment' | 'settings'
+export type ChatMode = '通常相談' | 'タスク相談' | '課題サポート' | '進捗報告'
+export type Mood = 'very_good' | 'good' | 'normal' | 'tired' | 'exhausted'
+
+export interface Task {
+  id: string
+  title: string
+  deadline: string
+  category: Category
+  priority: Priority
+  progress: Progress
+  estimatedMinutes: number
+  status: Status
+  memo: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  createdAt: string
+  mode: ChatMode
+}
+
+export interface Settings {
+  tone: '執事' | 'やさしい' | '簡潔'
+  strictness: 'やさしめ' | '標準' | '厳しめ'
+  notifications: '少なめ' | '標準' | '多め'
+  name: string
+}
+
+export interface MoodLog {
+  id: string
+  date: string
+  mood: Mood
+  memo: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DiaryEntry {
+  id: string
+  date: string
+  mood: Mood
+  doneToday: string
+  hardThings: string
+  carryOver: string
+  freeMemo: string
+  aiComment: string
+  createdAt: string
+  updatedAt: string
+}

@@ -1,0 +1,14 @@
+{
+  "name": "Lady's Butler",
+  "short_name": "Butler",
+  "description": "生活・課題・気分を一緒に整理するパーソナル執事アプリ",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f7f6f2",
+  "theme_color": "#172a3a",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
