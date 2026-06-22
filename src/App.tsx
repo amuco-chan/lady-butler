@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { Archive, ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Edit3, FileText, Home, Menu, MessageCircle, NotebookPen, Plus, Search, Send, Settings as SettingsIcon, Sparkles, Trash2, X } from 'lucide-react'
 import type { ChatMessage, ChatMode, DiaryEntry, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { assignmentOutput, dayPlan, defaultSettings, formatDeadline, initialMessages, localDate, makeButlerReply, makeDiaryComment, moodGuidance, moodInfo, moodOptions, rankedTasks, sampleTasks, toLocalDateTimeValue, useStoredState } from './lib'
+import { assignmentOutput, dayPlan, defaultSettings, formatDeadline, initialMessages, isTaskAddRequest, localDate, makeButlerReply, makeDiaryComment, moodGuidance, moodInfo, moodOptions, rankedTasks, sampleTasks, taskAddedReply, taskFromChat, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'タスク', icon: CheckCircle2 },
@@ -22,7 +22,7 @@ export default function App() {
   const [menu, setMenu] = useState(false)
   const changePage = (p: Page) => { setPage(p); setMenu(false) }
   const saveTask = (task: Task) => { setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task]); setEditing(null) }
-  const complete = (id: string) => setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: 100, status: '完了', updatedAt: new Date().toISOString() } : t))
+  const complete = (id: string) => setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: t.status === '完了' ? 0 : 100, status: t.status === '完了' ? '未着手' : '完了', updatedAt: new Date().toISOString() } : t))
   const saveMood = (mood: Mood, memo: string, date = localDate()) => setMoodLogs(prev => {
     const existing = prev.find(log => log.date === date), now = new Date().toISOString()
     return existing ? prev.map(log => log.date === date ? { ...log, mood, memo, updatedAt: now } : log) : [{ id: crypto.randomUUID(), date, mood, memo, createdAt: now, updatedAt: now }, ...prev]
@@ -42,7 +42,7 @@ export default function App() {
       <div className="page-wrap">
         {page === 'home' && <HomePage tasks={tasks} moodLogs={moodLogs} go={changePage} complete={complete}/>} 
         {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
-        {page === 'chat' && <ChatPage tasks={tasks} moodLogs={moodLogs} diaries={diaries} messages={messages} setMessages={setMessages}/>} 
+        {page === 'chat' && <ChatPage tasks={tasks} moodLogs={moodLogs} diaries={diaries} messages={messages} setMessages={setMessages} settings={settings} addTask={task => setTasks(prev => [...prev, task])}/>}
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
         {page === 'assignment' && <GeneratorPage/>}
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} clear={() => { localStorage.clear(); location.reload() }}/>} 
@@ -93,11 +93,23 @@ function TasksPage({ tasks, edit, remove, complete }: { tasks: Task[]; edit: (t:
   </>
 }
 
-function ChatPage({ tasks, moodLogs, diaries, messages, setMessages }: { tasks: Task[]; moodLogs: MoodLog[]; diaries: DiaryEntry[]; messages: ChatMessage[]; setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>> }) {
-  const [mode, setMode] = useState<ChatMode>('通常相談'), [input, setInput] = useState(''), end = useRef<HTMLDivElement>(null)
+function ChatPage({ tasks, moodLogs, diaries, messages, setMessages, settings, addTask }: { tasks: Task[]; moodLogs: MoodLog[]; diaries: DiaryEntry[]; messages: ChatMessage[]; setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>; settings: Settings; addTask: (task: Task) => void }) {
+  const [mode, setMode] = useState<ChatMode>('通常相談'), [input, setInput] = useState(''), end = useRef<HTMLDivElement>(null), sending = useRef(false)
   const latestMood = [...moodLogs].sort((a,b) => b.date.localeCompare(a.date))[0]
-  const send = () => { if (!input.trim()) return; const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: input.trim(), createdAt: new Date().toISOString(), mode }; const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content: makeButlerReply(input, mode, tasks, moodLogs, [...diaries].sort((a,b) => b.date.localeCompare(a.date))), createdAt: new Date().toISOString(), mode }; setMessages(p => [...p, user, reply]); setInput(''); setTimeout(() => end.current?.scrollIntoView({ behavior:'smooth' }), 50) }
-  return <div className="chat-page"><PageHeading eyebrow="PRIVATE SALON" title="執事に相談">雑な言葉で構いません。状況を整理し、次の一手にいたします。</PageHeading><div className="chat-layout"><aside className="chat-context"><span>相談モード</span>{(['通常相談','タスク相談','課題サポート','進捗報告'] as ChatMode[]).map(m => <button className={m===mode?'active':''} onClick={() => setMode(m)} key={m}>{m}</button>)}<div className="context-note"><b>現在の最優先</b><p>{dayPlan(tasks, latestMood?.mood).top?.title || 'タスクなし'}</p>{latestMood && <small>{moodInfo(latestMood.mood)?.emoji} {moodInfo(latestMood.mood)?.label}として調整中</small>}</div></aside><section className="chat-card"><div className="chat-header"><div className="avatar butler">B</div><div><strong>Butler</strong><span><i/> お仕えしています</span></div><small>{mode}</small></div><div className="messages">{messages.map(m => <div className={`message ${m.role}`} key={m.id}>{m.role==='assistant' && <div className="avatar butler">B</div>}<div><p>{m.content}</p><span>{new Intl.DateTimeFormat('ja-JP',{hour:'2-digit',minute:'2-digit'}).format(new Date(m.createdAt))}</span></div></div>)}<div ref={end}/></div><div className="suggestions">{['今日なにすればいい？','課題やばい','進捗だめ'].map(v => <button key={v} onClick={() => setInput(v)}>{v}</button>)}</div><div className="composer"><textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()} }} placeholder="レディ、何が気になっていますか？"/><button onClick={send}><Send size={18}/></button></div><small className="composer-note">Enterで送信 ・ Shift + Enterで改行</small></section></div></div>
+  const send = () => {
+    const text = input.trim()
+    if (!text || sending.current) return
+    sending.current = true
+    const created = taskFromChat(text)
+    const duplicate = created && tasks.some(task => task.status !== '完了' && task.title === created.task.title && task.deadline === created.task.deadline)
+    if (created && !duplicate) addTask(created.task)
+    const content = duplicate ? `レディ、「${created.task.title}」は同じ締切ですでに登録されています。二重登録はいたしませんでした。` : created ? taskAddedReply(created) : isTaskAddRequest(text) ? '承知しました、レディ。追加する内容を教えてください。例：「明日18時までに心理学レポートを提出するタスクを追加して」' : makeButlerReply(text, mode, tasks, moodLogs, [...diaries].sort((a,b) => b.date.localeCompare(a.date)), settings, messages)
+    const createdAt = new Date().toISOString()
+    const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, createdAt, mode }
+    const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content, createdAt: new Date().toISOString(), mode }
+    setMessages(p => [...p, user, reply]); setInput(''); setTimeout(() => { sending.current = false; end.current?.scrollIntoView({ behavior:'smooth' }) }, 50)
+  }
+  return <div className="chat-page"><PageHeading eyebrow="PRIVATE SALON" title="執事に相談">雑な言葉で構いません。状況を整理し、次の一手にいたします。</PageHeading><div className="chat-layout"><aside className="chat-context"><span>相談モード</span>{(['通常相談','タスク相談','課題サポート','進捗報告'] as ChatMode[]).map(m => <button className={m===mode?'active':''} onClick={() => setMode(m)} key={m}>{m}</button>)}<div className="context-note"><b>現在の最優先</b><p>{dayPlan(tasks, latestMood?.mood).top?.title || 'タスクなし'}</p>{latestMood && <small>{moodInfo(latestMood.mood)?.emoji} {moodInfo(latestMood.mood)?.label}として調整中</small>}</div></aside><section className="chat-card"><div className="chat-header"><div className="avatar butler">B</div><div><strong>Butler</strong><span><i/> お仕えしています</span></div><small>{mode}</small></div><div className="messages">{messages.map(m => <div className={`message ${m.role}`} key={m.id}>{m.role==='assistant' && <div className="avatar butler">B</div>}<div><p>{m.content}</p><span>{new Intl.DateTimeFormat('ja-JP',{hour:'2-digit',minute:'2-digit'}).format(new Date(m.createdAt))}</span></div></div>)}<div ref={end}/></div><div className="suggestions">{['今日なにすればいい？','課題やばい','進捗だめ'].map(v => <button key={v} onClick={() => setInput(v)}>{v}</button>)}</div><div className="composer"><textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()} }} placeholder="相談、または「○○をタスクに追加して」"/><button onClick={send}><Send size={18}/></button></div><small className="composer-note">Enterで送信 ・ 締切や時間も文章から読み取ります</small></section></div></div>
 }
 
 function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodLog[]; diaries: DiaryEntry[]; saveMood: (mood: Mood, memo: string, date?: string) => void; saveDiary: (entry: DiaryEntry) => void }) {

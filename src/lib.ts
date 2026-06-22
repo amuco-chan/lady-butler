@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ChatMessage, ChatMode, DiaryEntry, Mood, MoodLog, Settings, Task } from './types'
+import type { Category, ChatMessage, ChatMode, DiaryEntry, Mood, MoodLog, Priority, Settings, Task } from './types'
 
 const todayAt = (hour: number, addDays = 0) => {
   const date = new Date()
@@ -89,24 +89,244 @@ export function makeDiaryComment(entry: Pick<DiaryEntry, 'mood' | 'doneToday' | 
   return `レディ、本日できたことは「${done}」です。完璧でなくとも、これは前進です。\n\nしんどかった点は「${hard}」。ここは根性で押し切るより、負担として認めるのが現実的です。\n\n明日に回すのは「${carry}」。最初から全部ではなく、もっとも小さな一手から始めましょう。\n\n${ending}`
 }
 
-export function makeButlerReply(input: string, mode: ChatMode, tasks: Task[], moodLogs: MoodLog[] = [], diaries: DiaryEntry[] = []) {
+export function makeButlerReply(input: string, mode: ChatMode, tasks: Task[], moodLogs: MoodLog[] = [], diaries: DiaryEntry[] = [], settings: Settings = defaultSettings, history: ChatMessage[] = []) {
+  const text = input.trim()
   const latestMood = [...moodLogs].sort((a, b) => b.date.localeCompare(a.date))[0]
   const plan = dayPlan(tasks, latestMood?.mood), top = plan.top
   const taskName = top?.title ?? '新しいタスクの整理'
   const firstStep = top ? firstAction(top) : '気になっていることを1つ、タスクとして登録する'
-  const lower = input.toLowerCase()
-  const moodContext = latestMood ? `\n\n直近の気分は「${moodInfo(latestMood.mood)?.label}」です。${moodGuidance(latestMood.mood)}` : ''
-  const diaryContext = diaries[0]?.carryOver ? ` 日記で明日に回した「${diaries[0].carryOver}」も忘れずに扱います。` : ''
-  if (/今日|なにすれば|何すれば/.test(input)) {
-    return `レディ、本日の状況を整理いたしました。${moodContext}${diaryContext}\n\n【今日の最優先】\n${taskName}${top ? `（${formatDeadline(top.deadline).label}・残り${100 - top.progress}%）` : ''}\n\n【今日やること】\n${plan.today.map((t, i) => `${i + 1}. ${t.title} — ${Math.max(10, Math.round(t.estimatedMinutes * (100 - t.progress) / 100))}分`).join('\n') || 'まずタスクを1件登録する'}\n\n【余裕があればやること】\n${plan.extra.map(t => `・${t.title}`).join('\n') || '本日は増やさなくて結構です'}\n\n【やらなくていいこと】\n締切の遠い低優先タスク。今は横に置いてください。\n\n【最初の10分】\n${firstStep}。完璧より、着手を優先いたしましょう。`
+  const lady = settings.name.trim() || 'レディ'
+  const concise = settings.tone === '簡潔'
+  const gentle = settings.tone === 'やさしい' || settings.strictness === 'やさしめ'
+  const strict = settings.strictness === '厳しめ'
+  const lastAssistant = [...history].reverse().find(message => message.role === 'assistant')?.content ?? ''
+  const moodLine = latestMood ? `直近の気分は「${moodInfo(latestMood.mood)?.label}」。${moodGuidance(latestMood.mood)}` : ''
+  const diaryLine = diaries[0]?.carryOver ? `日記に残した「${diaries[0].carryOver}」も候補に入れます。` : ''
+
+  if (/死にたい|消えたい|自傷|自分を傷つけ|殺したい/.test(text)) {
+    return `${lady}、今は一人で抱えないでください。私はここで話を聞けますが、この状況を私だけで支えることはできません。\n\n今すぐ危険があるなら、緊急サービスへ連絡するか、近くの信頼できる方に「一人にしないで」と伝えてください。短い一言で構いません。`
   }
-  if (mode === '進捗報告' || /まだ|半分|できた|進捗|やる気|終わった/.test(input)) {
-    if (/終わった|完了|できた/.test(input) && !/ない|まだ/.test(input)) return `よく進めました、レディ。ここで勢いだけに頼らず、一度保存して提出条件を確認しましょう。\n\n次の一手は「抜けがないか3分だけ見直す」です。それが済んだら、次のタスクは ${taskName} です。`
-    return `承知しました、レディ。進んでいない事実は確認しますが、責める時間は不要です。${moodContext}\n\n今の最優先は「${taskName}」。まずは ${firstStep} だけ実行してください。10分後に続けるかを判断しましょう。私は味方ですが、言い訳の味方ではありません。`
+
+  if (/^(ありがとう|ありがと|助かった|サンキュー)[。！!]*$/.test(text)) {
+    return concise ? `どういたしまして、${lady}。` : `どういたしまして、${lady}。必要になったら、いつでも続きをお聞かせください。`
   }
-  if (mode === '課題サポート' || /レポート|課題/.test(input)) return `レディ、まず課題の条件を切り分けましょう。現在の最優先は「${taskName}」です。\n\n最初の一手は、課題文を開いて「問われている動詞」と「提出条件」に線を引くこと。課題サポート画面に指示文とご自身のメモを入れていただければ、構成と下書きの叩き台まで整えます。`
-  if (/無理|やばい|詰ん|だめ/.test(input) || lower.includes('help')) return `レディ、大丈夫です。ただし、状況を曖昧なままにすると夜が詰みます。\n\n現在もっとも危ないのは「${taskName}」です。今は100点を狙うより、0点を避ける判断をいたしましょう。\n\n最初の10分は ${firstStep}。それ以外は一度閉じてください。`
-  return `承知しました、レディ。お話を整理すると、今は「${taskName}」を軸に考えるのが現実的です。\n\nまず ${firstStep}。10分だけ進めてから、次の判断をいたしましょう。${input.length < 12 ? '\n\nもう少し聞いてほしいだけでしたら、解決を急がずお供します。' : ''}`
+
+  if (/^(おはよう|こんにちは|こんばんは|ただいま|やっほー|やっほ)[。！!]*$/.test(text)) {
+    const greeting = /おはよう/.test(text) ? 'おはようございます' : /こんばんは/.test(text) ? 'こんばんは' : /ただいま/.test(text) ? 'お帰りなさいませ' : 'こんにちは'
+    return `${greeting}、${lady}。${moodLine ? ` ${moodLine}` : ''}\n今日は、相談・予定の整理・ただのお話、どれから始めましょうか。`
+  }
+
+  if (/^(うん|はい|そう|そうだね|わかった|了解|なるほど|おっけー|OK)[。！!]*$/i.test(text)) {
+    if (!lastAssistant || /何があった|聞かせて|教えて|ですか|ましょうか|[？?]/.test(lastAssistant)) return `はい、${lady}。急がなくて大丈夫です。続けてください。`
+    return concise ? `承知しました。` : `承知しました、${lady}。また話したくなったところから続けましょう。`
+  }
+
+  if (/話を?聞いて|ただ聞いて|愚痴|相談(?:に)?乗って|聞いてほしい/.test(text)) {
+    return `${lady}、もちろんです。今は結論を急がずに聞きます。うまく整理しなくて構いません。何があったか、そのまま話してください。`
+  }
+
+  if (/彼氏|彼女|好きな人|恋愛|友達|人間関係|返信|既読|LINE|家族|先生|同僚|バイト先/.test(text)) {
+    if (/むかつく|腹立|イライラ|嫌い/.test(text)) return `${lady}、それは腹が立ちますね。今は無理にきれいにまとめなくて構いません。\nまず、相手が実際にしたことと、そこから感じたことを分けて話してみてください。`
+    return `${lady}、それは気になりますよね。相手の反応だけで結論を決める前に、まず「実際に起きたこと」と「自分がどう感じたか」を分けましょう。\nよければ、いちばん引っかかっている場面を一つだけ教えてください。`
+  }
+
+  if (/夕飯|晩ごはん|ご飯何|何食べ|食事/.test(text)) {
+    return `${lady}、今日は手間で決めましょう。\n余力なしなら買う・頼む、少しなら丼か麺、動けるなら温かい汁物を足す。この三択なら、今の体力に近いのはどれですか。`
+  }
+
+  if (/今日|なにすれば|何すれば/.test(text) && !/終わった|完了|できた|進捗/.test(text)) {
+    return `${lady}、今日の分だけに絞ります。${moodLine ? `\n${moodLine}` : ''}${diaryLine ? `\n${diaryLine}` : ''}\n\n【今日の最優先】\n${taskName}${top ? `（${formatDeadline(top.deadline).label}・残り${100 - top.progress}%）` : ''}\n\n【今日やること】\n${plan.today.map((task, index) => `${index + 1}. ${task.title} — ${Math.max(10, Math.round(task.estimatedMinutes * (100 - task.progress) / 100))}分`).join('\n') || 'いま気になっていることを一件だけ登録する'}\n\n【余裕があればやること】\n${plan.extra.map(task => `・${task.title}`).join('\n') || '今日は増やさなくて大丈夫です'}\n\n【やらなくていいこと】\n締切の遠い低優先タスク\n\n【最初の10分】\n${firstStep}。`
+  }
+
+  if (mode === '進捗報告' || /まだ|半分|できた|進捗|やる気|終わった|少しやった|手をつけた/.test(text)) {
+    if (/終わった|完了|できた|少しやった|手をつけた/.test(text) && !/できない|終わってない|まだ/.test(text)) {
+      return `${lady}、きちんと前進しています。${/少し|手をつけた/.test(text) ? '着手できたこと自体が大事です。' : 'まずは完了、お疲れさまでした。'}\n今は次へ急がず、保存や提出条件を一度だけ確認しましょう。`
+    }
+    return `${lady}、進んでいないことは分かりました。責める必要はありません。${moodLine ? `\n${moodLine}` : ''}\nいまは「${taskName}」の全部ではなく、${firstStep}。そこまでで一度止めて構いません。`
+  }
+
+  if (mode === '課題サポート' || /レポート|課題|宿題|リアペ|論文/.test(text)) {
+    if (/手伝って|やばい|終わらない|間に合わない|どうしよう/.test(text)) return `${lady}、焦りますよね。まず完成させようとせず、締切と提出条件だけ確認しましょう。\nその次は、課題文から「何について」「何をする」の二つを抜き出します。課題文を貼っていただければ、そこから一緒に整えます。`
+    return `${lady}、課題の話ですね。課題文・締切・いま書けているところのうち、分かるものだけ教えてください。全部そろっていなくても始められます。`
+  }
+
+  if (/疲れた|眠い|しんどい|何もしたくない|動けない/.test(text)) {
+    return `${lady}、今は動きにくい状態なのですね。${gentle ? '無理に立て直さなくて大丈夫です。' : 'その状態で予定を詰めると、かえって苦しくなります。'}\n水分を取る、横になる、期限の近い連絡だけする。この中から一つで十分です。`
+  }
+
+  if (/不安|焦る|怖い|落ち込|泣きそう|つらい/.test(text)) {
+    return `${lady}、それは落ち着かないですよね。今すぐ答えを出さなくて構いません。\nまず、起きている事実を一つと、いちばん心配なことを一つだけ分けて教えてください。`
+  }
+
+  if (/無理|やばい|詰ん|だめ/.test(text) || text.toLowerCase().includes('help')) {
+    if (!top) return `${lady}、かなり焦っているのですね。まず、いちばん期限が近いものを一つだけ教えてください。そこから順番を作ります。`
+    return `${lady}、焦っているのですね。全部を同時に片づける必要はありません。\n今は「${taskName}」だけ見ましょう。最初は ${firstStep}。${strict ? 'ここは先延ばしにせず、10分だけ始めてください。' : '10分で止めても構いません。'} `
+  }
+
+  if (mode === 'タスク相談' || /何から|どこから|優先|間に合う|今から何分|終わらせたい/.test(text)) {
+    if (!top) return `${lady}、まず気になっていることを一件だけタスクにしましょう。名前だけで構いません。`
+    return `${lady}、今は「${taskName}」からです。${formatDeadline(top.deadline).label}で、残りはおよそ${Math.max(10, Math.round(top.estimatedMinutes * (100 - top.progress) / 100))}分です。\n最初は ${firstStep}。その後に続けるか判断しましょう。`
+  }
+
+  if (/迷って|決められない|どっち|どうしよう/.test(text)) {
+    return `${lady}、一緒に決めましょう。選択肢を二つまで挙げてください。期限・負担・後悔の少なさで比べます。`
+  }
+
+  if (/[？?]$|どう思う|どうしたら|教えて/.test(text)) {
+    return `${lady}、考える材料をもう一つだけください。いま一番知りたいのは「原因」「選び方」「次の行動」のどれでしょう。質問攻めにはいたしません。`
+  }
+
+  return concise
+    ? `${lady}、承知しました。もう少し聞かせてください。`
+    : `${lady}、その話をもう少し聞かせてください。今は無理にタスクへ結びつけず、いちばん引っかかっているところから整理しましょう。`
+}
+
+export interface ChatTaskResult {
+  task: Task
+  usedDefaultDeadline: boolean
+}
+
+export function isTaskAddRequest(input: string) {
+  return /タスク追加|(?:タスク|やること|予定)(?:に|へ)?(?:追加|登録|入れて)|(?:追加|登録)して(?:ください|ほしい)?|覚えておいて/.test(input)
+}
+
+export function taskFromChat(input: string): ChatTaskResult | null {
+  if (!isTaskAddRequest(input)) return null
+
+  const now = new Date()
+  const deadline = new Date(now)
+  deadline.setDate(deadline.getDate() + 1)
+  deadline.setHours(23, 59, 0, 0)
+  let hasDate = false
+  let hasTime = false
+
+  const japaneseDate = input.match(/(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日/)
+  const numericDate = input.match(/(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})/)
+  const fullDate = japaneseDate || numericDate
+  if (fullDate) {
+    const specifiedYear = Boolean(fullDate[1])
+    const year = specifiedYear ? Number(fullDate[1]) : now.getFullYear()
+    const month = Number(fullDate[2])
+    const day = Number(fullDate[3])
+    const candidate = new Date(year, month - 1, day, 23, 59, 0, 0)
+    const valid = candidate.getFullYear() === year && candidate.getMonth() === month - 1 && candidate.getDate() === day
+    if (valid) {
+      if (!specifiedYear && candidate.getTime() < now.getTime()) candidate.setFullYear(year + 1)
+      deadline.setTime(candidate.getTime())
+      hasDate = true
+    }
+  } else if (/明後日/.test(input)) {
+    deadline.setTime(now.getTime())
+    deadline.setDate(now.getDate() + 2)
+    hasDate = true
+  } else if (/明日/.test(input)) {
+    deadline.setTime(now.getTime())
+    deadline.setDate(now.getDate() + 1)
+    hasDate = true
+  } else if (/今日/.test(input)) {
+    deadline.setTime(now.getTime())
+    hasDate = true
+  } else if (/来週/.test(input)) {
+    deadline.setTime(now.getTime())
+    deadline.setDate(now.getDate() + 7)
+    hasDate = true
+  } else {
+    const weekday = input.match(/([月火水木金土日])曜(?:日)?/)
+    if (weekday) {
+      const target = ['日', '月', '火', '水', '木', '金', '土'].indexOf(weekday[1])
+      const days = (target - now.getDay() + 7) % 7 || 7
+      deadline.setTime(now.getTime())
+      deadline.setDate(now.getDate() + days)
+      hasDate = true
+    }
+  }
+
+  const time = input.match(/(午前|午後)?\s*(\d{1,2})(?::(\d{1,2})|時(?!間)(?:(\d{1,2})分|半)?)/)
+  if (time) {
+    let hour = Number(time[2])
+    if (time[1] === '午後' && hour < 12) hour += 12
+    if (time[1] === '午前' && hour === 12) hour = 0
+    const minute = time[3] ? Number(time[3]) : time[4] ? Number(time[4]) : /半/.test(time[0]) ? 30 : 0
+    const valid = hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 && !(time[1] && Number(time[2]) > 12)
+    if (valid) {
+      if (!hasDate) {
+        deadline.setTime(now.getTime())
+        deadline.setHours(hour, minute, 0, 0)
+        if (deadline.getTime() <= now.getTime()) deadline.setDate(deadline.getDate() + 1)
+      } else {
+        deadline.setHours(hour, minute, 0, 0)
+      }
+      hasTime = true
+    }
+  }
+  if (!hasTime) {
+    deadline.setHours(23, 59, 0, 0)
+  }
+
+  const quoted = input.match(/[「『](.+?)[」』]/)?.[1]
+  let title = quoted || input
+  title = title
+    .replace(/^\s*(?:執事[、,]?\s*)?/, '')
+    .replace(/^(?:タスク)?追加\s*[:：]\s*/, '')
+    .replace(/(?:(?:を)?(?:タスク|やること|予定)(?:を|に|へ)?(?:追加|登録|入れて)(?:して)?|(?:を)?(?:追加|登録)して)(?:ください|ほしい)?[。！!]?$/u, '')
+    .replace(/覚えておいて(?:ください)?[。！!]?$/u, '')
+    .replace(/(?:(?:\d{4}年)?\d{1,2}月\d{1,2}日|(?:\d{4}[/-])?\d{1,2}[/-]\d{1,2}|明後日|明日|今日|来週|[月火水木金土日]曜(?:日)?)(?:の)?/g, '')
+    .replace(/(?:午前|午後)?\s*\d{1,2}(?::\d{1,2}|時(?!間)(?:(?:\d{1,2}分)|半)?)/g, '')
+    .replace(/(?:締切|期限)?(?:まで)(?:に)?/g, '')
+    .replace(/(?:(?:優先度(?:は|を)?|優先)(?:高|中|低)|(?:緊急|急ぎ))(?:で|に)?/g, '')
+    .replace(/\d+(?:\.\d+)?\s*(?:分|時間)(?:くらい|程度)?/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[、,]{2,}/g, '、')
+    .replace(/(?:[、,]\s*)?(?:で|に|の)$/u, '')
+    .replace(/^[\s、,:：]+|[\s、,:：。！!]+$/g, '')
+    .replace(/[をにへ]$/u, '')
+    .trim()
+
+  if (hasDate || hasTime) title = title.replace(/^(?:まで)?に\s*/u, '').trim()
+
+  if (!title || /^(?:タスク|やること|予定)$/.test(title)) return null
+
+  let category: Category = 'その他'
+  if (/レポート|課題|宿題|提出|論文|作文/.test(title)) category = '課題'
+  else if (/授業|講義|ゼミ|予習|復習|ノート/.test(title)) category = '授業'
+  else if (/買う|購入|買い物|注文/.test(title)) category = '買い物'
+  else if (/バイト|シフト|勤務/.test(title)) category = 'バイト'
+  else if (/予約|予定|会う|病院|美容院|面談/.test(title)) category = '予定'
+  else if (/掃除|洗濯|片付け|支払|家事|ごみ|ゴミ/.test(title)) category = '生活'
+
+  const daysUntil = (deadline.getTime() - now.getTime()) / 86400000
+  let priority: Priority = (hasDate || hasTime) && daysUntil <= 1.75 ? '高' : '中'
+  if (/優先度(?:は|を)?低|低優先|いつか|余裕があれば/.test(input)) priority = '低'
+  if (/優先度(?:は|を)?高|高優先|最優先|緊急|急ぎ/.test(input)) priority = '高'
+
+  const duration = input.match(/(\d+(?:\.\d+)?)\s*時間(?:\s*(\d+)\s*分)?/) || input.match(/(\d+(?:\.\d+)?)\s*(分)/)
+  const defaultMinutes = category === '買い物' ? 20 : category === '予定' ? 30 : category === '課題' ? 60 : 30
+  const estimatedMinutes = duration
+    ? Math.min(600, Math.max(5, Math.round(Number(duration[1]) * (duration[2] === '分' ? 1 : 60) + (duration[2] === '分' ? 0 : Number(duration[2] || 0)))))
+    : defaultMinutes
+  const timestamp = now.toISOString()
+
+  return {
+    task: {
+      id: crypto.randomUUID(),
+      title,
+      deadline: toLocalDateTimeValue(deadline),
+      category,
+      priority,
+      progress: 0,
+      estimatedMinutes,
+      status: '未着手',
+      memo: 'AIチャットから追加',
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    },
+    usedDefaultDeadline: !hasDate && !hasTime,
+  }
+}
+
+export function taskAddedReply(result: ChatTaskResult) {
+  const { task, usedDefaultDeadline } = result
+  return `承知しました、レディ。「${task.title}」をタスクに追加しました。\n\n締切：${formatDeadline(task.deadline).date}${usedDefaultDeadline ? '（指定がなかったため、明日中に設定）' : ''}\n優先度：${task.priority}\nカテゴリ：${task.category}\n所要時間：${task.estimatedMinutes}分\n\n内容はタスク画面からいつでも編集できます。`
 }
 
 function firstAction(task: Task) {
