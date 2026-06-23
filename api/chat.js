@@ -60,7 +60,7 @@ function outputText(data) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' })
-  if (!process.env.OPENAI_API_KEY || !process.env.APP_ACCESS_TOKEN) return res.status(503).json({ error: 'AI is not configured' })
+  if (!process.env.APP_ACCESS_TOKEN) return res.status(503).json({ error: 'AI is not configured' })
   if (!safeEqual(req.headers['x-app-token'], process.env.APP_ACCESS_TOKEN)) return res.status(401).json({ error: 'Invalid access token' })
 
   let body
@@ -76,6 +76,67 @@ export default async function handler(req, res) {
     role: message.role === 'assistant' ? 'assistant' : 'user',
     content: text(message.content),
   })).filter(message => message.content) : []
+
+  // 1. Try to connect to local Ollama first
+  const ollamaUrl = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434'
+  let useOllama = false
+  let ollamaModel = ''
+
+  try {
+    const tagsResponse = await fetch(`${ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(1000) })
+    if (tagsResponse.ok) {
+      const tagsData = await tagsResponse.json()
+      if (tagsData.models && tagsData.models.length > 0) {
+        const names = tagsData.models.map(m => m.name)
+        // Prefer gemma2:2b, gemma2, llama3, or use first available model
+        const preferred = names.find(n => n.startsWith('gemma2:2b') || n.startsWith('gemma2') || n.startsWith('llama3'))
+        ollamaModel = preferred || names[0]
+        useOllama = true
+      }
+    }
+  } catch (e) {
+    // Ollama not running or timeout
+  }
+
+  if (useOllama) {
+    try {
+      const systemPrompt = `${instructions}\n\n現在のアプリ情報:\n${buildContext(body)}`
+      const ollamaMessages = [
+        { role: 'system', content: systemPrompt },
+        ...history,
+        { role: 'user', content: input }
+      ]
+
+      const response = await fetch(`${ollamaUrl}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: ollamaModel,
+          messages: ollamaMessages,
+          stream: false,
+          options: {
+            temperature: 0.7,
+            num_predict: 700,
+          }
+        })
+      })
+
+      const data = await response.json()
+      if (!response.ok) {
+        throw new Error(data.error || 'Ollama returned error')
+      }
+      const reply = data.message?.content?.trim()
+      if (!reply) return res.status(502).json({ error: 'Ollama returned no text' })
+      return res.status(200).json({ reply: `${reply}\n\n※ ローカルAI (${ollamaModel}) による返答です。` })
+    } catch (err) {
+      console.error('Ollama chat failed, falling back to OpenAI', err)
+    }
+  }
+
+  // 2. Fallback to OpenAI API
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(503).json({ error: 'AI is not configured (OpenAI API key is missing and local Ollama is offline)' })
+  }
 
   try {
     const response = await fetch('https://api.openai.com/v1/responses', {
