@@ -296,7 +296,7 @@ export function taskSuggestionsFromGptReply(reply: string) {
     const parsed = taskFromChat(input)
     if (!parsed) continue
 
-    suggestions.push({ ...parsed.task, memo: 'ChatGPTの返事から追加候補' })
+    suggestions.push({ ...parsed.task, priority: (priority || parsed.task.priority) as Priority, memo: 'ChatGPTの返事から追加候補' })
     seen.add(rawTitle)
     if (suggestions.length >= 3) break
   }
