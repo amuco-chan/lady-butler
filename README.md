@@ -23,8 +23,18 @@
 - Lucide React（アイコン）
 - localStorage（個人用MVPのデータ保存）
 - ローカル執事ルールエンジン（APIキー不要）
+- OpenAI Responses API（Vercel公開時に有効化、`gpt-5.4-mini`）
 
-APIキーやサーバーなしで、ダウンロード後すぐに動く構成を優先しています。LLM APIを接続する場合も、`src/lib.ts` の応答・生成関数をAPI呼び出しへ置き換えれば画面側はそのまま利用できます。
+AI未接続時は端末内の補助返答で動きます。Vercelへ公開してOpenAI APIを設定すると、直近の会話・タスク・気分・日記を踏まえた本物のAI会話へ切り替わります。
+
+## 本物のAI会話を有効にする
+
+1. [OpenAI APIキー](https://platform.openai.com/api-keys)を作成します。API利用料はChatGPTの契約とは別です。
+2. `outputs/本物AIを公開.command` をターミナルから実行します。
+3. 非表示の入力欄へOpenAI APIキーを貼り付けます。
+4. 公開後、自動的にコピーされる「AI接続コード」をアプリの「設定 → 本物のAI接続」へ貼り付けます。
+
+OpenAI APIキーはVercelの秘密環境変数に保存し、ブラウザやGitHubへは含めません。AI接続時は、返答に必要な直近の会話・未完了タスク・気分・日記がAPIへ送信されます。
 
 ## 画面一覧
 
