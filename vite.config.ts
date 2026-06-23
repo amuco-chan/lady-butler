@@ -70,7 +70,7 @@ export default defineConfig(({ mode }) => {
             originalPrintUrls()
             console.log('\n  🤖 \x1b[32mReal AI Chat Local server enabled\x1b[0m')
             console.log('  ➜  AI access token is loaded without printing it.')
-            console.log('  ➜  For no-cost use, keep Settings on "無料GPT相談モード".\n')
+            console.log('  ➜  Auto AI is the main mode. Local Ollama is tried first.\n')
           }
         }
       }
