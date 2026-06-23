@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Archive, ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clipboard, Clock3, Edit3, ExternalLink, FileText, Home, Menu, MessageCircle, NotebookPen, Plus, Search, Send, Settings as SettingsIcon, Sparkles, Trash2, X } from 'lucide-react'
 import type { ChatMessage, ChatMode, DiaryEntry, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
 import { requestAiReply } from './ai'
@@ -12,8 +12,24 @@ const nav: { id: Page; label: string; icon: typeof Home }[] = [
 
 const blankTask = (): Task => ({ id: crypto.randomUUID(), title: '', deadline: toLocalDateTimeValue(new Date(Date.now() + 86400000)), category: '課題', priority: '中', progress: 0, estimatedMinutes: 60, status: '未着手', memo: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
 
+function useIsMobileView() {
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.matchMedia('(max-width: 760px)').matches : false)
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 760px)')
+    const update = () => setIsMobile(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
+  return isMobile
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>('home')
+  const isMobile = useIsMobileView()
+  const visibleNav = isMobile ? nav.filter(item => item.id !== 'chat') : nav
   const [tasks, setTasks] = useStoredState<Task[]>('lady.tasks', sampleTasks)
   const [messages, setMessages] = useStoredState<ChatMessage[]>('lady.messages', initialMessages())
   const [moodLogs, setMoodLogs] = useStoredState<MoodLog[]>('lady.moods', [])
@@ -30,10 +46,20 @@ export default function App() {
   })
   const saveDiary = (entry: DiaryEntry) => setDiaries(prev => prev.some(item => item.date === entry.date) ? prev.map(item => item.date === entry.date ? entry : item) : [entry, ...prev])
 
+  useEffect(() => {
+    if (localStorage.getItem('lady.autoAiMainApplied') === '2026-06-23') return
+    setSettings(previous => ({ ...defaultSettings, ...previous, aiMode: 'auto_api' }))
+    localStorage.setItem('lady.autoAiMainApplied', '2026-06-23')
+  }, [setSettings])
+
+  useEffect(() => {
+    if (isMobile && page === 'chat') setPage('home')
+  }, [isMobile, page])
+
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? 'open' : ''}`}>
       <div className="brand"><div className="crest">L</div><div><strong>Lady's Butler</strong><span>Personal assistant</span></div><button className="icon-button mobile-close" onClick={() => setMenu(false)}><X size={20}/></button></div>
-      <nav>{nav.map(item => <button key={item.id} title={item.label} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'tasks' && <em>{tasks.filter(t => t.status !== '完了').length}</em>}</button>)}</nav>
+      <nav>{visibleNav.map(item => <button key={item.id} title={item.label} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'tasks' && <em>{tasks.filter(t => t.status !== '完了').length}</em>}</button>)}</nav>
       <div className="sidebar-quote"><Sparkles size={16}/><p>完璧でなくて構いません。<br/>まず提出できる形に。</p></div>
       <div className="profile-mini"><div className="avatar">L</div><div><strong>{settings.name || 'レディ'}</strong><span>本日もお供します</span></div></div>
     </aside>
@@ -41,7 +67,7 @@ export default function App() {
     <main>
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><button className="quick-add" onClick={() => setEditing(blankTask())}><Plus size={17}/>タスクを追加</button></header>
       <div className="page-wrap">
-        {page === 'home' && <HomePage tasks={tasks} moodLogs={moodLogs} go={changePage} complete={complete}/>} 
+        {page === 'home' && <HomePage tasks={tasks} moodLogs={moodLogs} go={changePage} complete={complete} showChatActions={!isMobile}/>} 
         {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
         {page === 'chat' && <ChatPage tasks={tasks} moodLogs={moodLogs} diaries={diaries} messages={messages} setMessages={setMessages} settings={settings} addTask={task => setTasks(prev => [...prev, task])}/>}
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
@@ -49,7 +75,7 @@ export default function App() {
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} clear={() => { localStorage.clear(); location.reload() }}/>} 
       </div>
     </main>
-    <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}</button>)}</nav>
+    <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{visibleNav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}</button>)}</nav>
     {editing && <TaskModal task={editing} save={saveTask} close={() => setEditing(null)}/>} 
   </div>
 }
@@ -58,19 +84,19 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ tasks, moodLogs, go, complete }: { tasks: Task[]; moodLogs: MoodLog[]; go: (p: Page) => void; complete: (id: string) => void }) {
+function HomePage({ tasks, moodLogs, go, complete, showChatActions }: { tasks: Task[]; moodLogs: MoodLog[]; go: (p: Page) => void; complete: (id: string) => void; showChatActions: boolean }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const plan = dayPlan(tasks, todayMood), incomplete = tasks.filter(t => t.status !== '完了')
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   const guidance = moodGuidance(todayMood)
   return <>
     <PageHeading eyebrow={date} title="お帰りなさいませ、レディ。">本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
-    <section className="butler-callout"><div className="butler-mark"><Sparkles/></div><div><span>THE BUTLER'S NOTE</span><h2>{plan.top ? `本日の最優先は「${plan.top.title}」です。` : '本日の予定はすべて片づいております。'}</h2><p>{todayMood ? guidance : plan.top ? `完璧を目指す必要はありません。まず10分で「${plan.top.category === '課題' ? '資料を開き、見出しを3つ作る' : '必要なものを1つ開く'}」ところから始めましょう。` : '少し休むか、明日の準備をひとつだけしておきましょう。'}</p></div><button onClick={() => go('chat')}>執事に相談する <ArrowRight size={16}/></button></section>
+    <section className="butler-callout"><div className="butler-mark"><Sparkles/></div><div><span>THE BUTLER'S NOTE</span><h2>{plan.top ? `本日の最優先は「${plan.top.title}」です。` : '本日の予定はすべて片づいております。'}</h2><p>{todayMood ? guidance : plan.top ? `完璧を目指す必要はありません。まず10分で「${plan.top.category === '課題' ? '資料を開き、見出しを3つ作る' : '必要なものを1つ開く'}」ところから始めましょう。` : '少し休むか、明日の準備をひとつだけしておきましょう。'}</p></div>{showChatActions && <button onClick={() => go('chat')}>執事に相談する <ArrowRight size={16}/></button>}</section>
     <div className="stats-row"><Stat icon={<CheckCircle2/>} label="未完了タスク" value={`${incomplete.length}`} suffix="件"/><Stat icon={<Clock3/>} label="今日の予定時間" value={`${plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)}`} suffix="分"/><Stat icon={<CalendarDays/>} label="締切間近" value={`${incomplete.filter(t => formatDeadline(t.deadline).urgent).length}`} suffix="件" danger/></div>
     <div className="home-grid">
       <section className="card today-card"><div className="section-title"><div><span>TODAY'S FOCUS</span><h2>今日やること</h2></div><button className="text-button" onClick={() => go('tasks')}>すべて見る <ArrowRight size={15}/></button></div>
         <div className="task-stack">{plan.today.length ? plan.today.map((task, i) => <TaskRow key={task.id} task={task} rank={i + 1} complete={complete}/>) : <Empty text="本日のタスクはありません"/>}</div>
-        {plan.top && <div className="first-ten"><div><Clock3 size={18}/><strong>最初の10分</strong></div><p>{plan.top.category === '課題' ? '資料を開き、タイトルと見出しを3つだけ書く。' : `「${plan.top.title}」に必要なものを1つ開く。`}</p><button onClick={() => go('chat')}>このタスクを相談</button></div>}
+        {plan.top && <div className="first-ten"><div><Clock3 size={18}/><strong>最初の10分</strong></div><p>{plan.top.category === '課題' ? '資料を開き、タイトルと見出しを3つだけ書く。' : `「${plan.top.title}」に必要なものを1つ開く。`}</p>{showChatActions && <button onClick={() => go('chat')}>このタスクを相談</button>}</div>}
       </section>
       <section className="card deadline-card"><div className="section-title"><div><span>UPCOMING</span><h2>締切が近いもの</h2></div></div>{rankedTasks(tasks).slice(0,4).map(t => { const d = formatDeadline(t.deadline); return <div className="deadline-row" key={t.id}><div className={`date-tile ${d.urgent ? 'urgent' : ''}`}><b>{new Date(t.deadline).getDate()}</b><span>{new Intl.DateTimeFormat('en', { month: 'short' }).format(new Date(t.deadline)).toUpperCase()}</span></div><div><strong>{t.title}</strong><span>{t.category} ・ {d.date}</span></div><div className={`badge priority-${t.priority}`}>{t.priority}</div></div>})}</section>
     </div>
@@ -95,8 +121,8 @@ function TasksPage({ tasks, edit, remove, complete }: { tasks: Task[]; edit: (t:
 }
 
 function ChatPage({ tasks, moodLogs, diaries, messages, setMessages, settings, addTask }: { tasks: Task[]; moodLogs: MoodLog[]; diaries: DiaryEntry[]; messages: ChatMessage[]; setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>; settings: Settings; addTask: (task: Task) => void }) {
-  const aiMode = settings.aiMode ?? 'free_gpt'
-  const autoAiEnabled = aiMode === 'auto_api' && Boolean(settings.aiAccessToken)
+  const aiMode = settings.aiMode ?? defaultSettings.aiMode
+  const autoAiEnabled = aiMode === 'auto_api'
   const [mode, setMode] = useState<ChatMode>('通常相談'), [input, setInput] = useState(''), [replying, setReplying] = useState(false), [aiStatus, setAiStatus] = useState<'ready'|'thinking'|'online'|'local'>(autoAiEnabled ? 'ready' : 'local'), [gptPrompt, setGptPrompt] = useState(''), [copied, setCopied] = useState(false), [pastedReply, setPastedReply] = useState(''), [suggestedTasks, setSuggestedTasks] = useState<Task[]>([]), end = useRef<HTMLDivElement>(null), sending = useRef(false)
   const latestMood = [...moodLogs].sort((a,b) => b.date.localeCompare(a.date))[0]
   const makePrompt = () => {
@@ -157,9 +183,9 @@ function ChatPage({ tasks, moodLogs, diaries, messages, setMessages, settings, a
     setMessages(previous => [...previous, reply]); sending.current = false; setReplying(false); setTimeout(() => end.current?.scrollIntoView({ behavior:'smooth' }), 50)
   }
   const statusLabel = autoAiEnabled
-    ? aiStatus === 'thinking' ? 'OpenAIが考えています' : aiStatus === 'online' ? '自動AI接続中' : aiStatus === 'ready' ? '自動AI準備済み' : '端末内の補助返答'
-    : '無料GPT相談モード'
-  return <div className="chat-page"><PageHeading eyebrow="PRIVATE SALON" title="執事に相談">普段は無料GPT相談モード。必要な時だけChatGPTへきれいに渡せます。</PageHeading><div className="chat-layout"><aside className="chat-context"><span>相談モード</span>{(['通常相談','タスク相談','課題サポート','進捗報告'] as ChatMode[]).map(m => <button className={m===mode?'active':''} onClick={() => setMode(m)} key={m}>{m}</button>)}<div className="context-note"><b>現在の最優先</b><p>{dayPlan(tasks, latestMood?.mood).top?.title || 'タスクなし'}</p>{latestMood && <small>{moodInfo(latestMood.mood)?.emoji} {moodInfo(latestMood.mood)?.label}として調整中</small>}<small>無料モードではAPI料金はかかりません</small></div></aside><section className="chat-card"><div className="chat-header"><div className="avatar butler">B</div><div><strong>Butler</strong><span><i className={aiStatus === 'local' ? 'local' : aiStatus === 'thinking' ? 'thinking' : ''}/>{statusLabel}</span></div><small>{mode}</small></div>{!autoAiEnabled && <div className="free-ai-panel"><div><span>FREE GPT SALON</span><h3>ChatGPTへ相談する</h3><p>タスク・気分・日記をまとめた相談文を作ります。コピーしてChatGPTに貼るだけです。</p></div><div className="free-ai-actions"><button type="button" onClick={makePrompt}><Sparkles size={15}/>相談文を作る</button><button type="button" onClick={() => void copyPrompt()} disabled={!gptPrompt && !input.trim()}><Clipboard size={15}/>{copied ? 'コピー済み' : 'コピー'}</button><button type="button" onClick={openChatGpt}><ExternalLink size={15}/>ChatGPTを開く</button></div>{gptPrompt && <textarea className="gpt-prompt" value={gptPrompt} onChange={e => setGptPrompt(e.target.value)} /> }<div className="gpt-import"><textarea value={pastedReply} onChange={e => setPastedReply(e.target.value)} placeholder="ChatGPTの返事をここに貼ると、チャット履歴に保存してタスク候補を読み取ります。"/><button type="button" onClick={importGptReply} disabled={!pastedReply.trim()}><ArrowRight size={15}/>貼り戻す</button></div>{suggestedTasks.length > 0 && <div className="suggested-tasks"><b>追加できそうなタスク</b>{suggestedTasks.map(task => <div key={task.id}><span>{task.title}<small>{formatDeadline(task.deadline).label}・{task.estimatedMinutes}分・優先度{task.priority}</small></span><button type="button" onClick={() => addSuggestedTask(task)}><Plus size={14}/>追加</button></div>)}</div>}</div>}<div className="messages">{messages.map(m => <div className={`message ${m.role}`} key={m.id}>{m.role==='assistant' && <div className="avatar butler">B</div>}<div><p>{m.content}</p><span>{new Intl.DateTimeFormat('ja-JP',{hour:'2-digit',minute:'2-digit'}).format(new Date(m.createdAt))}</span></div></div>)}{replying && <div className="message"><div className="avatar butler">B</div><div><p className="thinking-message">考えています…</p></div></div>}<div ref={end}/></div><div className="suggestions">{['今日なにすればいい？','課題やばい','進捗だめ'].map(v => <button key={v} disabled={replying} onClick={() => setInput(v)}>{v}</button>)}</div><div className="composer"><textarea disabled={replying} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()} }} placeholder="相談、または「○○をタスクに追加して」"/><button disabled={replying || !input.trim()} onClick={() => void send()}><Send size={18}/></button></div><small className="composer-note">{autoAiEnabled ? 'Enterで送信 ・ 自動AI接続時は直近の会話と予定を参照します' : 'Enterで送信 ・ 深い相談は上の無料GPT相談からChatGPTへ渡せます'}</small></section></div></div>
+    ? aiStatus === 'thinking' ? '自動AIが考えています' : aiStatus === 'online' ? '自動AI接続中' : aiStatus === 'ready' ? '自動AIメイン' : '端末内の補助返答'
+    : 'ChatGPT貼り戻しモード'
+  return <div className="chat-page"><PageHeading eyebrow="PRIVATE SALON" title="執事に相談">PC版では自動AIをメインに使います。ローカル起動時はOllamaを優先します。</PageHeading><div className="chat-layout"><aside className="chat-context"><span>相談モード</span>{(['通常相談','タスク相談','課題サポート','進捗報告'] as ChatMode[]).map(m => <button className={m===mode?'active':''} onClick={() => setMode(m)} key={m}>{m}</button>)}<div className="context-note"><b>現在の最優先</b><p>{dayPlan(tasks, latestMood?.mood).top?.title || 'タスクなし'}</p>{latestMood && <small>{moodInfo(latestMood.mood)?.emoji} {moodInfo(latestMood.mood)?.label}として調整中</small>}<small>{autoAiEnabled ? '自動AIがメインです' : 'ChatGPT貼り戻しは予備ルートです'}</small></div></aside><section className="chat-card"><div className="chat-header"><div className="avatar butler">B</div><div><strong>Butler</strong><span><i className={aiStatus === 'local' ? 'local' : aiStatus === 'thinking' ? 'thinking' : ''}/>{statusLabel}</span></div><small>{mode}</small></div>{!autoAiEnabled && <div className="free-ai-panel"><div><span>BACKUP GPT SALON</span><h3>ChatGPTへ相談する</h3><p>自動AIを使わない時だけ、タスク・気分・日記をまとめた相談文を作ります。</p></div><div className="free-ai-actions"><button type="button" onClick={makePrompt}><Sparkles size={15}/>相談文を作る</button><button type="button" onClick={() => void copyPrompt()} disabled={!gptPrompt && !input.trim()}><Clipboard size={15}/>{copied ? 'コピー済み' : 'コピー'}</button><button type="button" onClick={openChatGpt}><ExternalLink size={15}/>ChatGPTを開く</button></div>{gptPrompt && <textarea className="gpt-prompt" value={gptPrompt} onChange={e => setGptPrompt(e.target.value)} /> }<div className="gpt-import"><textarea value={pastedReply} onChange={e => setPastedReply(e.target.value)} placeholder="ChatGPTの返事をここに貼ると、チャット履歴に保存してタスク候補を読み取ります。"/><button type="button" onClick={importGptReply} disabled={!pastedReply.trim()}><ArrowRight size={15}/>貼り戻す</button></div>{suggestedTasks.length > 0 && <div className="suggested-tasks"><b>追加できそうなタスク</b>{suggestedTasks.map(task => <div key={task.id}><span>{task.title}<small>{formatDeadline(task.deadline).label}・{task.estimatedMinutes}分・優先度{task.priority}</small></span><button type="button" onClick={() => addSuggestedTask(task)}><Plus size={14}/>追加</button></div>)}</div>}</div>}<div className="messages">{messages.map(m => <div className={`message ${m.role}`} key={m.id}>{m.role==='assistant' && <div className="avatar butler">B</div>}<div><p>{m.content}</p><span>{new Intl.DateTimeFormat('ja-JP',{hour:'2-digit',minute:'2-digit'}).format(new Date(m.createdAt))}</span></div></div>)}{replying && <div className="message"><div className="avatar butler">B</div><div><p className="thinking-message">考えています…</p></div></div>}<div ref={end}/></div><div className="suggestions">{['今日なにすればいい？','課題やばい','進捗だめ'].map(v => <button key={v} disabled={replying} onClick={() => setInput(v)}>{v}</button>)}</div><div className="composer"><textarea disabled={replying} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()} }} placeholder="相談、または「○○をタスクに追加して」"/><button disabled={replying || !input.trim()} onClick={() => void send()}><Send size={18}/></button></div><small className="composer-note">{autoAiEnabled ? 'Enterで送信 ・ 自動AIは直近の会話と予定を参照します' : 'Enterで送信 ・ ChatGPT貼り戻しは予備として使えます'}</small></section></div></div>
 }
 
 function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodLog[]; diaries: DiaryEntry[]; saveMood: (mood: Mood, memo: string, date?: string) => void; saveDiary: (entry: DiaryEntry) => void }) {
@@ -193,8 +219,8 @@ function Field({ label, children, wide, required }: { label:string; children:Rea
 
 function SettingsPage({ settings, setSettings, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; clear:()=>void }) {
   const update=<K extends keyof Settings>(k:K,v:Settings[K])=>setSettings(p=>({...defaultSettings,...p,[k]:v}))
-  const aiMode = settings.aiMode ?? 'free_gpt'
-  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section"><div><h2>AIの使い方</h2><p>普段は無料GPT相談モードがおすすめです。公開URLをスマホで使う場合は、このモードが一番安全です。</p></div><div className="ai-settings"><Field label="モード"><select value={aiMode} onChange={e=>update('aiMode',e.target.value as Settings['aiMode'])}><option value="free_gpt">無料GPT相談モード</option><option value="auto_api">自動AIモード（ローカル起動時はOllama優先）</option></select></Field>{aiMode === 'free_gpt' ? <p className="settings-hint">アプリが相談文を作り、ChatGPTへコピーして使います。アプリ側のAPI料金はかかりません。</p> : <><Field label="AI接続コード"><input type="password" autoComplete="off" value={settings.aiAccessToken ?? ''} onChange={e=>update('aiAccessToken',e.target.value)} placeholder="接続コードを入力" /></Field><p className="settings-hint warning">Macでローカル起動している時だけ、Ollamaを自動検出して優先使用します。公開URLやスマホではOllamaには届かないため、OpenAI APIまたは無料GPT相談モードを使います。</p></>}</div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>通常は端末内に保存されます。無料GPT相談モードでは、コピーした相談文だけをあなた自身がChatGPTへ渡します。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
+  const aiMode = settings.aiMode ?? defaultSettings.aiMode
+  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section"><div><h2>AIの使い方</h2><p>PC版では自動AIモードをメインにします。Macでローカル起動している時はOllamaを優先します。</p></div><div className="ai-settings"><Field label="モード"><select value={aiMode} onChange={e=>update('aiMode',e.target.value as Settings['aiMode'])}><option value="auto_api">自動AIモード（Ollama優先）</option><option value="free_gpt">ChatGPT貼り戻しモード</option></select></Field>{aiMode === 'free_gpt' ? <p className="settings-hint">自動AIを使わない時の予備です。アプリが相談文を作り、ChatGPTへコピーして使います。</p> : <><Field label="AI接続コード"><input type="password" autoComplete="off" value={settings.aiAccessToken ?? ''} onChange={e=>update('aiAccessToken',e.target.value)} placeholder="接続コードを入力" /></Field><p className="settings-hint warning">ローカル起動時はOllamaを自動検出して優先使用します。スマホ版はチャットなし、公開URLのPC版で自動AIを使う場合は接続コードとサーバー側AI設定が必要です。</p></>}</div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>通常は端末内に保存されます。ChatGPT貼り戻しモードでは、コピーした相談文だけをあなた自身がChatGPTへ渡します。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
 }
 
 function TaskModal({ task: initial, save, close }: { task: Task; save:(t:Task)=>void; close:()=>void }) {
