@@ -19,7 +19,7 @@ export const sampleTasks: Task[] = [
   { id: crypto.randomUUID(), title: '日用品を買う', deadline: todayAt(20, 5), category: '買い物', priority: '低', progress: 0, estimatedMinutes: 20, status: '未着手', memo: '洗剤、ティッシュ', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ]
 
-export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', aiMode: 'free_gpt', aiAccessToken: '' }
+export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', aiMode: 'auto_api', aiAccessToken: '' }
 
 export function useStoredState<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [state, setState] = useState<T>(() => {
