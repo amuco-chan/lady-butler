@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { Archive, ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Edit3, FileText, Home, Menu, MessageCircle, NotebookPen, Plus, Search, Send, Settings as SettingsIcon, Sparkles, Trash2, X } from 'lucide-react'
 import type { ChatMessage, ChatMode, DiaryEntry, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
+import { requestAiReply } from './ai'
 import { assignmentOutput, dayPlan, defaultSettings, formatDeadline, initialMessages, isTaskAddRequest, localDate, makeButlerReply, makeDiaryComment, moodGuidance, moodInfo, moodOptions, rankedTasks, sampleTasks, taskAddedReply, taskFromChat, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
@@ -94,22 +95,42 @@ function TasksPage({ tasks, edit, remove, complete }: { tasks: Task[]; edit: (t:
 }
 
 function ChatPage({ tasks, moodLogs, diaries, messages, setMessages, settings, addTask }: { tasks: Task[]; moodLogs: MoodLog[]; diaries: DiaryEntry[]; messages: ChatMessage[]; setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>; settings: Settings; addTask: (task: Task) => void }) {
-  const [mode, setMode] = useState<ChatMode>('通常相談'), [input, setInput] = useState(''), end = useRef<HTMLDivElement>(null), sending = useRef(false)
+  const [mode, setMode] = useState<ChatMode>('通常相談'), [input, setInput] = useState(''), [replying, setReplying] = useState(false), [aiStatus, setAiStatus] = useState<'ready'|'thinking'|'online'|'local'>(settings.aiAccessToken ? 'ready' : 'local'), end = useRef<HTMLDivElement>(null), sending = useRef(false)
   const latestMood = [...moodLogs].sort((a,b) => b.date.localeCompare(a.date))[0]
-  const send = () => {
+  const send = async () => {
     const text = input.trim()
     if (!text || sending.current) return
-    sending.current = true
+    sending.current = true; setReplying(true)
     const created = taskFromChat(text)
     const duplicate = created && tasks.some(task => task.status !== '完了' && task.title === created.task.title && task.deadline === created.task.deadline)
     if (created && !duplicate) addTask(created.task)
-    const content = duplicate ? `レディ、「${created.task.title}」は同じ締切ですでに登録されています。二重登録はいたしませんでした。` : created ? taskAddedReply(created) : isTaskAddRequest(text) ? '承知しました、レディ。追加する内容を教えてください。例：「明日18時までに心理学レポートを提出するタスクを追加して」' : makeButlerReply(text, mode, tasks, moodLogs, [...diaries].sort((a,b) => b.date.localeCompare(a.date)), settings, messages)
     const createdAt = new Date().toISOString()
     const user: ChatMessage = { id: crypto.randomUUID(), role: 'user', content: text, createdAt, mode }
+    setMessages(previous => [...previous, user]); setInput(''); setTimeout(() => end.current?.scrollIntoView({ behavior:'smooth' }), 50)
+
+    let content: string
+    if (duplicate) content = `レディ、「${created.task.title}」は同じ締切ですでに登録されています。二重登録はいたしませんでした。`
+    else if (created) content = taskAddedReply(created)
+    else if (isTaskAddRequest(text)) content = '承知しました、レディ。追加する内容を教えてください。例：「明日18時までに心理学レポートを提出するタスクを追加して」'
+    else if (settings.aiAccessToken) {
+      try {
+        setAiStatus('thinking')
+        content = await requestAiReply({ input: text, mode, messages, tasks, moodLogs, diaries, settings })
+        setAiStatus('online')
+      } catch {
+        setAiStatus('local')
+        content = `${makeButlerReply(text, mode, tasks, moodLogs, [...diaries].sort((a,b) => b.date.localeCompare(a.date)), settings, messages)}\n\n※ AIへ接続できなかったため、端末内の補助返答です。`
+      }
+    } else {
+      setAiStatus('local')
+      content = makeButlerReply(text, mode, tasks, moodLogs, [...diaries].sort((a,b) => b.date.localeCompare(a.date)), settings, messages)
+    }
+
     const reply: ChatMessage = { id: crypto.randomUUID(), role: 'assistant', content, createdAt: new Date().toISOString(), mode }
-    setMessages(p => [...p, user, reply]); setInput(''); setTimeout(() => { sending.current = false; end.current?.scrollIntoView({ behavior:'smooth' }) }, 50)
+    setMessages(previous => [...previous, reply]); sending.current = false; setReplying(false); setTimeout(() => end.current?.scrollIntoView({ behavior:'smooth' }), 50)
   }
-  return <div className="chat-page"><PageHeading eyebrow="PRIVATE SALON" title="執事に相談">雑な言葉で構いません。状況を整理し、次の一手にいたします。</PageHeading><div className="chat-layout"><aside className="chat-context"><span>相談モード</span>{(['通常相談','タスク相談','課題サポート','進捗報告'] as ChatMode[]).map(m => <button className={m===mode?'active':''} onClick={() => setMode(m)} key={m}>{m}</button>)}<div className="context-note"><b>現在の最優先</b><p>{dayPlan(tasks, latestMood?.mood).top?.title || 'タスクなし'}</p>{latestMood && <small>{moodInfo(latestMood.mood)?.emoji} {moodInfo(latestMood.mood)?.label}として調整中</small>}</div></aside><section className="chat-card"><div className="chat-header"><div className="avatar butler">B</div><div><strong>Butler</strong><span><i/> お仕えしています</span></div><small>{mode}</small></div><div className="messages">{messages.map(m => <div className={`message ${m.role}`} key={m.id}>{m.role==='assistant' && <div className="avatar butler">B</div>}<div><p>{m.content}</p><span>{new Intl.DateTimeFormat('ja-JP',{hour:'2-digit',minute:'2-digit'}).format(new Date(m.createdAt))}</span></div></div>)}<div ref={end}/></div><div className="suggestions">{['今日なにすればいい？','課題やばい','進捗だめ'].map(v => <button key={v} onClick={() => setInput(v)}>{v}</button>)}</div><div className="composer"><textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()} }} placeholder="相談、または「○○をタスクに追加して」"/><button onClick={send}><Send size={18}/></button></div><small className="composer-note">Enterで送信 ・ 締切や時間も文章から読み取ります</small></section></div></div>
+  const statusLabel = aiStatus === 'thinking' ? 'OpenAIが考えています' : aiStatus === 'online' ? 'OpenAI接続中' : aiStatus === 'ready' ? 'AI接続準備済み' : 'ローカル応答'
+  return <div className="chat-page"><PageHeading eyebrow="PRIVATE SALON" title="執事に相談">雑な言葉で構いません。状況を整理し、次の一手にいたします。</PageHeading><div className="chat-layout"><aside className="chat-context"><span>相談モード</span>{(['通常相談','タスク相談','課題サポート','進捗報告'] as ChatMode[]).map(m => <button className={m===mode?'active':''} onClick={() => setMode(m)} key={m}>{m}</button>)}<div className="context-note"><b>現在の最優先</b><p>{dayPlan(tasks, latestMood?.mood).top?.title || 'タスクなし'}</p>{latestMood && <small>{moodInfo(latestMood.mood)?.emoji} {moodInfo(latestMood.mood)?.label}として調整中</small>}</div></aside><section className="chat-card"><div className="chat-header"><div className="avatar butler">B</div><div><strong>Butler</strong><span><i className={aiStatus === 'local' ? 'local' : aiStatus === 'thinking' ? 'thinking' : ''}/>{statusLabel}</span></div><small>{mode}</small></div><div className="messages">{messages.map(m => <div className={`message ${m.role}`} key={m.id}>{m.role==='assistant' && <div className="avatar butler">B</div>}<div><p>{m.content}</p><span>{new Intl.DateTimeFormat('ja-JP',{hour:'2-digit',minute:'2-digit'}).format(new Date(m.createdAt))}</span></div></div>)}{replying && <div className="message"><div className="avatar butler">B</div><div><p className="thinking-message">考えています…</p></div></div>}<div ref={end}/></div><div className="suggestions">{['今日なにすればいい？','課題やばい','進捗だめ'].map(v => <button key={v} disabled={replying} onClick={() => setInput(v)}>{v}</button>)}</div><div className="composer"><textarea disabled={replying} value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();void send()} }} placeholder="相談、または「○○をタスクに追加して」"/><button disabled={replying || !input.trim()} onClick={() => void send()}><Send size={18}/></button></div><small className="composer-note">Enterで送信 ・ AI接続時は直近の会話と予定を参照します</small></section></div></div>
 }
 
 function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodLog[]; diaries: DiaryEntry[]; saveMood: (mood: Mood, memo: string, date?: string) => void; saveDiary: (entry: DiaryEntry) => void }) {
@@ -143,7 +164,7 @@ function Field({ label, children, wide, required }: { label:string; children:Rea
 
 function SettingsPage({ settings, setSettings, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; clear:()=>void }) {
   const update=(k:keyof Settings,v:string)=>setSettings(p=>({...p,[k]:v}))
-  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value)}><option>執事</option><option>やさしい</option><option>簡潔</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value)}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value)}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、会話、設定はこのブラウザ内だけに保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
+  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value)}><option>執事</option><option>やさしい</option><option>簡潔</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value)}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value)}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section"><div><h2>本物のAI接続</h2><p>OpenAI APIキーではなく、公開時に発行する個人用接続コードを入力します。</p></div><Field label="AI接続コード"><input type="password" autoComplete="off" value={settings.aiAccessToken ?? ''} onChange={e=>update('aiAccessToken',e.target.value)} placeholder="接続コードを入力" /></Field></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>通常は端末内に保存されます。AI接続時は返答に必要な直近の会話・タスク・気分・日記が安全なAPI経由でOpenAIへ送信されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
 }
 
 function TaskModal({ task: initial, save, close }: { task: Task; save:(t:Task)=>void; close:()=>void }) {
