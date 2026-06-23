@@ -13,14 +13,12 @@ interface AiChatRequest {
 const endpoint = import.meta.env.VITE_AI_API_URL || '/api/chat'
 
 export async function requestAiReply({ input, mode, messages, tasks, moodLogs, diaries, settings }: AiChatRequest) {
-  if (!settings.aiAccessToken) throw new Error('AI access token is not configured')
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (settings.aiAccessToken) headers['X-App-Token'] = settings.aiAccessToken
 
   const response = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-App-Token': settings.aiAccessToken,
-    },
+    headers,
     body: JSON.stringify({
       input,
       mode,
