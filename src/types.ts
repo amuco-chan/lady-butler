@@ -5,6 +5,7 @@ export type Progress = 0 | 25 | 50 | 75 | 100
 export type Page = 'home' | 'tasks' | 'chat' | 'diary' | 'assignment' | 'settings'
 export type ChatMode = '通常相談' | 'タスク相談' | '課題サポート' | '進捗報告'
 export type Mood = 'very_good' | 'good' | 'normal' | 'tired' | 'exhausted'
+export type AiMode = 'free_gpt' | 'auto_api'
 
 export interface Task {
   id: string
@@ -29,10 +30,11 @@ export interface ChatMessage {
 }
 
 export interface Settings {
-  tone: '執事' | 'やさしい' | '簡潔'
+  tone: '執事' | 'やさしい' | '簡潔' | 'イケメン'
   strictness: 'やさしめ' | '標準' | '厳しめ'
   notifications: '少なめ' | '標準' | '多め'
   name: string
+  aiMode: AiMode
   aiAccessToken: string
 }
 
