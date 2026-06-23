@@ -19,7 +19,7 @@ export const sampleTasks: Task[] = [
   { id: crypto.randomUUID(), title: '日用品を買う', deadline: todayAt(20, 5), category: '買い物', priority: '低', progress: 0, estimatedMinutes: 20, status: '未着手', memo: '洗剤、ティッシュ', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ]
 
-export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', aiAccessToken: '' }
+export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', aiMode: 'free_gpt', aiAccessToken: '' }
 
 export function useStoredState<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [state, setState] = useState<T>(() => {
@@ -58,7 +58,13 @@ export function dayPlan(tasks: Task[], mood?: Mood) {
 }
 
 export function formatDeadline(value: string, compact = false) {
-  const d = new Date(value), diff = Math.ceil((d.getTime() - Date.now()) / 86400000)
+  const d = new Date(value)
+  const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const now = new Date()
+  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const diffTime = dDate.getTime() - nowDate.getTime()
+  const diff = Math.round(diffTime / 86400000)
+
   const label = diff < 0 ? `${Math.abs(diff)}日超過` : diff === 0 ? '今日' : diff === 1 ? '明日' : `${diff}日後`
   const date = new Intl.DateTimeFormat('ja-JP', compact ? { month: 'numeric', day: 'numeric' } : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(d)
   return { date, label, urgent: diff <= 1 }
@@ -179,6 +185,123 @@ export function makeButlerReply(input: string, mode: ChatMode, tasks: Task[], mo
   return concise
     ? `${lady}、承知しました。もう少し聞かせてください。`
     : `${lady}、その話をもう少し聞かせてください。今は無理にタスクへ結びつけず、いちばん引っかかっているところから整理しましょう。`
+}
+
+export function buildChatGptPrompt({
+  input,
+  mode,
+  tasks,
+  moodLogs = [],
+  diaries = [],
+  settings = defaultSettings,
+  history = [],
+}: {
+  input: string
+  mode: ChatMode
+  tasks: Task[]
+  moodLogs?: MoodLog[]
+  diaries?: DiaryEntry[]
+  settings?: Settings
+  history?: ChatMessage[]
+}) {
+  const lady = settings.name?.trim() || 'レディ'
+  const latestMood = [...moodLogs].sort((a, b) => b.date.localeCompare(a.date))[0]
+  const sortedDiaries = [...diaries].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 2)
+  const plan = dayPlan(tasks, latestMood?.mood)
+  const remaining = rankedTasks(tasks).slice(0, 8)
+  const recentHistory = history.slice(-6).map(message => `${message.role === 'assistant' ? '執事' : '私'}: ${message.content}`).join('\n')
+  const taskLines = remaining.length
+    ? remaining.map(task => `- ${task.title} / 締切:${formatDeadline(task.deadline).label} ${formatDeadline(task.deadline, true).date} / 優先度:${task.priority} / 進捗:${task.progress}% / 目安:${task.estimatedMinutes}分 / メモ:${task.memo || 'なし'}`).join('\n')
+    : '- 未完了タスクなし'
+  const moodLines = moodLogs.length
+    ? [...moodLogs].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5).map(log => `- ${log.date}: ${moodInfo(log.mood)?.label ?? log.mood}${log.memo ? `（${log.memo}）` : ''}`).join('\n')
+    : '- まだ気分ログなし'
+  const diaryLines = sortedDiaries.length
+    ? sortedDiaries.map(entry => `- ${entry.date}: 気分=${moodInfo(entry.mood)?.label ?? entry.mood} / できたこと=${entry.doneToday || '未記入'} / しんどかったこと=${entry.hardThings || '未記入'} / 明日に回すこと=${entry.carryOver || '未記入'} / メモ=${entry.freeMemo || '未記入'}`).join('\n')
+    : '- まだ日記なし'
+  const request = input.trim() || '今日やることを、気分と締切に合わせて現実的に整理してほしい'
+
+  return `あなたは私専属のパーソナル執事AIです。日本語で、上品だけど重すぎない口調で返してください。
+
+呼び名: ${lady}
+相談モード: ${mode}
+口調: ${settings.tone}
+厳しさ: ${settings.strictness}
+
+私の相談:
+${request}
+
+今の気分:
+${latestMood ? `${moodInfo(latestMood.mood)?.emoji ?? ''} ${moodInfo(latestMood.mood)?.label ?? latestMood.mood}${latestMood.memo ? `（${latestMood.memo}）` : ''}` : '未記録'}
+
+気分の扱い:
+- とても良い/良い: 少し多めに提案してよい
+- 普通: 締切と優先度をもとに普通に提案
+- しんどい: 最低限に絞り、最初の10分だけ提案
+- かなり無理: 緊急の提出・連絡など生存ラインだけ。説教しない
+
+未完了タスク:
+${taskLines}
+
+アプリ側の今日の候補:
+- 最優先: ${plan.top?.title ?? 'なし'}
+- 今日やる候補: ${plan.today.map(task => task.title).join('、') || 'なし'}
+- 余裕があれば: ${plan.extra.map(task => task.title).join('、') || 'なし'}
+
+最近の気分ログ:
+${moodLines}
+
+最近の日記:
+${diaryLines}
+
+直近の会話:
+${recentHistory || 'なし'}
+
+返答ルール:
+1. まず私の状態を短く受け止める
+2. 今日やることを増やしすぎない
+3. 必要なら【今日の最優先】【今日やること】【余裕があれば】【最初の10分】を使う
+4. 最後に執事らしい一言を短く添える
+5. アプリに貼り戻してタスク追加できるよう、必要な場合だけ最後に【タスク候補】を作る
+
+【タスク候補】の形式:
+・タスク名（期限: 今日/明日/未定、所要: 10分、優先度: 高/中/低）
+
+タスク候補は最大3個。不要なら【タスク候補】は書かなくて構いません。`
+}
+
+export function taskSuggestionsFromGptReply(reply: string) {
+  const section = reply.match(/【タスク候補】([\s\S]*)/)?.[1] ?? ''
+  if (!section.trim()) return []
+
+  const suggestions: Task[] = []
+  const seen = new Set<string>()
+  const lines = section
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => /^(?:[-*・]|\d+[.)、．])/.test(line))
+
+  for (const line of lines) {
+    const rawTitle = line
+      .replace(/^(?:[-*・]|\d+[.)、．])\s*/, '')
+      .replace(/[（(].*$/, '')
+      .replace(/^(?:まず|次に|余裕があれば|最優先で|今日中に)\s*/, '')
+      .replace(/[。.!！]+$/, '')
+      .trim()
+
+    if (!rawTitle || rawTitle.length > 60 || seen.has(rawTitle)) continue
+
+    const priority = line.match(/優先度\s*[:：]?\s*(高|中|低)/)?.[1] ?? ''
+    const input = `${line} ${priority ? `優先度${priority}` : ''} 「${rawTitle}」をタスクに追加して`
+    const parsed = taskFromChat(input)
+    if (!parsed) continue
+
+    suggestions.push({ ...parsed.task, memo: 'ChatGPTの返事から追加候補' })
+    seen.add(rawTitle)
+    if (suggestions.length >= 3) break
+  }
+
+  return suggestions
 }
 
 export interface ChatTaskResult {
