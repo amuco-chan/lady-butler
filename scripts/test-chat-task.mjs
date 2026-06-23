@@ -53,5 +53,8 @@ assert.equal(suggested.length, 2)
 assert.equal(suggested[0].title, '心理学レポートの見出し整理')
 assert.equal(suggested[0].priority, '高')
 assert.equal(suggested[0].estimatedMinutes, 10)
+assert.equal(suggested[1].title, '水を飲んで休む')
+assert.equal(suggested[1].priority, '低')
+assert.equal(suggested[1].estimatedMinutes, 5)
 
 console.log('AIチャットのタスク追加テスト: OK')
