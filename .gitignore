@@ -4,3 +4,7 @@ dist/
 .DS_Store
 outputs/
 *.tsbuildinfo
+.env
+.env.*
+!.env.example
+.vercel/
