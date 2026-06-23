@@ -33,6 +33,7 @@ export interface Settings {
   strictness: 'やさしめ' | '標準' | '厳しめ'
   notifications: '少なめ' | '標準' | '多め'
   name: string
+  aiAccessToken: string
 }
 
 export interface MoodLog {
