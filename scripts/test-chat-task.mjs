@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { isTaskAddRequest, makeButlerReply, taskFromChat } from '../src/lib.ts'
+import { buildChatGptPrompt, isTaskAddRequest, makeButlerReply, taskFromChat, taskSuggestionsFromGptReply } from '../src/lib.ts'
 
 const parse = input => taskFromChat(input)?.task
 
@@ -42,5 +42,16 @@ assert.doesNotMatch(makeButlerReply('彼氏から返信がない', '通常相談
 assert.match(makeButlerReply('今日なにすればいい？', '通常相談', tasks), /【今日の最優先】/)
 assert.match(makeButlerReply('今日レポートできた', '通常相談', tasks), /前進/)
 assert.match(makeButlerReply('死にたい', '通常相談', tasks), /一人で抱えない/)
+
+const prompt = buildChatGptPrompt({ input: '今日はしんどい。何からやればいい？', mode: 'タスク相談', tasks, moodLogs: [], diaries: [] })
+assert.match(prompt, /今日はしんどい/)
+assert.match(prompt, /【タスク候補】/)
+assert.match(prompt, /未完了タスク/)
+
+const suggested = taskSuggestionsFromGptReply('【タスク候補】\n・心理学レポートの見出し整理（期限: 今日、所要: 10分、優先度: 高）\n・水を飲んで休む（期限: 未定、所要: 5分、優先度: 低）')
+assert.equal(suggested.length, 2)
+assert.equal(suggested[0].title, '心理学レポートの見出し整理')
+assert.equal(suggested[0].priority, '高')
+assert.equal(suggested[0].estimatedMinutes, 10)
 
 console.log('AIチャットのタスク追加テスト: OK')
