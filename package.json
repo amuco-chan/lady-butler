@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5174",
     "build": "tsc -b && vite build",
-    "test": "node --no-warnings --experimental-strip-types scripts/test-chat-task.mjs && node scripts/test-ai-api.mjs",
+    "test": "node --no-warnings --experimental-strip-types scripts/test-core.mjs",
     "preview": "vite preview --host 0.0.0.0 --port 4174"
   },
   "dependencies": {
