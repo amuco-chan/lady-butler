@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { Category, DiaryEntry, GptInboxItem, Mood, MoodLog, Priority, Settings, Task } from './types'
+import type { CalendarEvent, Category, DiaryEntry, GptInboxEventItem, GptInboxItem, GptInboxTaskItem, Mood, MoodLog, Priority, Settings, Task } from './types'
 
 const todayAt = (hour: number, addDays = 0) => {
   const date = new Date()
@@ -72,6 +72,28 @@ export function formatDeadline(value: string, compact = false) {
   return { date, label, urgent: diff <= 1 }
 }
 
+export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt'>) {
+  const start = new Date(event.startAt)
+  const end = new Date(event.endAt)
+  const safeStart = Number.isNaN(start.getTime()) ? new Date() : start
+  const safeEnd = Number.isNaN(end.getTime()) ? new Date(safeStart.getTime() + 60 * 60 * 1000) : end
+  const startDate = new Date(safeStart.getFullYear(), safeStart.getMonth(), safeStart.getDate())
+  const todayDate = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())
+  const diff = Math.round((startDate.getTime() - todayDate.getTime()) / 86400000)
+  const label = diff < 0 ? `${Math.abs(diff)}日前` : diff === 0 ? '今日' : diff === 1 ? '明日' : `${diff}日後`
+  const date = new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', weekday: 'short' }).format(safeStart)
+  const startTime = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' }).format(safeStart)
+  const endTime = new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' }).format(safeEnd)
+  const sameDay = localDate(safeStart) === localDate(safeEnd)
+  return {
+    date,
+    time: sameDay ? `${startTime} - ${endTime}` : `${startTime} - ${new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(safeEnd)}`,
+    label,
+    today: diff === 0,
+    past: diff < 0,
+  }
+}
+
 export function moodGuidance(mood?: Mood) {
   if (mood === 'very_good') return '本日は余力がありそうです。最優先のあと、先延ばししていたものにも少し触れましょう。'
   if (mood === 'good') return '調子は良さそうです。最優先に加えて、もう一つだけ前倒ししておきましょう。'
@@ -134,34 +156,96 @@ export function normalizeDeadline(value: unknown) {
   return Number.isNaN(date.getTime()) ? toLocalDateTimeValue(fallback) : toLocalDateTimeValue(date)
 }
 
+export function normalizeEventStart(value: unknown) {
+  const fallback = new Date(Date.now() + 86400000)
+  fallback.setHours(9, 0, 0, 0)
+  const text = textOf(value)
+  if (!text) return toLocalDateTimeValue(fallback)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text}T09:00`
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) return text
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:/.test(text)) {
+    const date = new Date(text)
+    if (!Number.isNaN(date.getTime())) return toLocalDateTimeValue(date)
+  }
+  const date = new Date(text)
+  return Number.isNaN(date.getTime()) ? toLocalDateTimeValue(fallback) : toLocalDateTimeValue(date)
+}
+
+export function normalizeEventEnd(startAt: string, value: unknown) {
+  const text = textOf(value)
+  const start = new Date(startAt)
+  const fallback = Number.isNaN(start.getTime()) ? new Date(Date.now() + 25 * 60 * 60 * 1000) : new Date(start.getTime() + 60 * 60 * 1000)
+  if (!text) return toLocalDateTimeValue(fallback)
+  const normalized = normalizeEventStart(text)
+  const end = new Date(normalized)
+  if (Number.isNaN(end.getTime()) || end <= start) return toLocalDateTimeValue(fallback)
+  return normalized
+}
+
 export function normalizeEstimatedMinutes(value: unknown) {
   const number = typeof value === 'number' ? value : Number.parseInt(textOf(value), 10)
   if (!Number.isFinite(number)) return 60
   return Math.min(720, Math.max(5, Math.round(number / 5) * 5))
 }
 
+function isEventLike(raw: Record<string, unknown>) {
+  const type = textOf(raw.type || raw.kind || raw.itemType || raw.item_type).toLowerCase()
+  return ['event', 'schedule', 'calendar', '予定', 'カレンダー'].includes(type) || !!(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when)
+}
+
+function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now: string): GptInboxTaskItem[] {
+  const title = textOf(raw.title || raw.name)
+  if (!title) return []
+  const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
+  const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
+  return [{
+    id: crypto.randomUUID(),
+    type: 'task',
+    title,
+    deadline: normalizeDeadline(raw.deadline || raw.dueDate || raw.due_date),
+    category: normalizeCategory(raw.category, title),
+    priority: normalizePriority(raw.priority),
+    estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
+    memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたタスク候補'),
+    sourceText: itemSource,
+    createdAt: now,
+  }]
+}
+
+function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now: string): GptInboxEventItem[] {
+  const title = textOf(raw.title || raw.name || raw.summary)
+  if (!title) return []
+  const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
+  const startAt = normalizeEventStart(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
+  const endAt = normalizeEventEnd(startAt, raw.endAt || raw.end_at || raw.end || raw.until)
+  const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
+  return [{
+    id: crypto.randomUUID(),
+    type: 'event',
+    title,
+    startAt,
+    endAt,
+    location: textOf(raw.location || raw.place || raw.where),
+    memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いた予定候補'),
+    sourceText: itemSource,
+    createdAt: now,
+  }]
+}
+
 export function normalizeGptInboxPayload(payload: unknown, now = new Date().toISOString()): GptInboxItem[] {
   const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
-  const rawItems = Array.isArray(root.items) ? root.items : Array.isArray(root.tasks) ? root.tasks : root.title || root.task ? [root.task && typeof root.task === 'object' ? root.task : root] : []
+  const rawItems = [
+    ...(Array.isArray(root.items) ? root.items : []),
+    ...(Array.isArray(root.tasks) ? root.tasks : []),
+    ...(Array.isArray(root.events) ? root.events : []),
+    ...(!Array.isArray(root.items) && !Array.isArray(root.tasks) && !Array.isArray(root.events) && (root.title || root.task || root.event)
+      ? [root.task && typeof root.task === 'object' ? root.task : root.event && typeof root.event === 'object' ? root.event : root]
+      : []),
+  ]
   const sourceText = textOf(root.sourceText || root.source_text || root.originalText || root.original_text)
-  return rawItems.flatMap((item) => {
+  return rawItems.flatMap((item): GptInboxItem[] => {
     const raw = item && typeof item === 'object' ? item as Record<string, unknown> : {}
-    const title = textOf(raw.title || raw.name)
-    if (!title) return []
-    const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
-    const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
-    return [{
-      id: crypto.randomUUID(),
-      type: 'task' as const,
-      title,
-      deadline: normalizeDeadline(raw.deadline || raw.dueDate || raw.due_date),
-      category: normalizeCategory(raw.category, title),
-      priority: normalizePriority(raw.priority),
-      estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
-      memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたタスク候補'),
-      sourceText: itemSource,
-      createdAt: now,
-    }]
+    return isEventLike(raw) ? normalizeGptEvent(raw, sourceText, now) : normalizeGptTask(raw, sourceText, now)
   })
 }
 
@@ -181,7 +265,7 @@ export function parseGptImportHash(hash: string) {
   }
 }
 
-export function inboxItemToTask(item: GptInboxItem): Task {
+export function inboxItemToTask(item: GptInboxTaskItem): Task {
   const now = new Date().toISOString()
   return {
     id: crypto.randomUUID(),
@@ -192,6 +276,20 @@ export function inboxItemToTask(item: GptInboxItem): Task {
     progress: 0,
     estimatedMinutes: item.estimatedMinutes,
     status: '未着手',
+    memo: item.memo,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function inboxItemToEvent(item: GptInboxEventItem): CalendarEvent {
+  const now = new Date().toISOString()
+  return {
+    id: crypto.randomUUID(),
+    title: item.title,
+    startAt: item.startAt,
+    endAt: item.endAt,
+    location: item.location,
     memo: item.memo,
     createdAt: now,
     updatedAt: now,
