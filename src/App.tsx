@@ -188,14 +188,29 @@ function SettingsPage({ settings, setSettings, clear }: { settings: Settings; se
 
 function EventModal({ event: initial, save, close }: { event: CalendarEvent; save:(event:CalendarEvent)=>void; close:()=>void }) {
   const [event,setEvent]=useState(initial)
-  const update=(k:keyof CalendarEvent,v:string)=>setEvent(p=>{
-    if (k !== 'startAt') return {...p,[k]:v}
-    const nextStart = new Date(v)
-    const currentEnd = new Date(p.endAt)
-    const endAt = Number.isNaN(nextStart.getTime()) || currentEnd > nextStart ? p.endAt : toLocalDateTimeValue(new Date(nextStart.getTime() + 60 * 60 * 1000))
-    return {...p,startAt:v,endAt}
+  const datePart = (value: string) => value?.slice(0, 10) || localDate()
+  const timePart = (value: string) => value?.slice(11, 16) || '10:00'
+  const merge = (date: string, time: string) => `${date || localDate()}T${time || '10:00'}`
+  const update=(k:keyof CalendarEvent,v:string)=>setEvent(p=>({...p,[k]:v}))
+  const updateStart=(part:'date'|'time',value:string)=>setEvent(p=>{
+    const oldStart = new Date(p.startAt), oldEnd = new Date(p.endAt)
+    const duration = !Number.isNaN(oldStart.getTime()) && !Number.isNaN(oldEnd.getTime()) && oldEnd > oldStart ? oldEnd.getTime() - oldStart.getTime() : 60 * 60 * 1000
+    const startAt = merge(part === 'date' ? value : datePart(p.startAt), part === 'time' ? value : timePart(p.startAt))
+    const nextStart = new Date(startAt)
+    const endAt = Number.isNaN(nextStart.getTime()) ? p.endAt : toLocalDateTimeValue(new Date(nextStart.getTime() + duration))
+    return {...p,startAt,endAt}
   })
-  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={e=>{e.preventDefault();if(event.title.trim())save(event)}}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2></div><button type="button" onClick={close}><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid"><Field label="開始"><input type="datetime-local" value={event.startAt} onChange={e=>update('startAt',e.target.value)}/></Field><Field label="終了"><input type="datetime-local" value={event.endAt} onChange={e=>update('endAt',e.target.value)}/></Field><Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
+  const updateEnd=(part:'date'|'time',value:string)=>setEvent(p=>({...p,endAt:merge(part === 'date' ? value : datePart(p.endAt), part === 'time' ? value : timePart(p.endAt))}))
+  const submit=(e:React.FormEvent)=>{
+    e.preventDefault()
+    if(!event.title.trim()) return
+    const start = new Date(event.startAt), end = new Date(event.endAt)
+    const fixedStart = Number.isNaN(start.getTime()) ? toLocalDateTimeValue(new Date()) : event.startAt
+    const safeStart = new Date(fixedStart)
+    const fixedEnd = Number.isNaN(end.getTime()) || end <= safeStart ? toLocalDateTimeValue(new Date(safeStart.getTime() + 60 * 60 * 1000)) : event.endAt
+    save({...event,startAt:fixedStart,endAt:fixedEnd})
+  }
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2></div><button type="button" onClick={close}><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid event-date-grid"><Field label="開始日"><input value={datePart(event.startAt)} onChange={e=>updateStart('date',e.target.value)} placeholder="2026-07-03" inputMode="numeric"/></Field><Field label="開始時刻"><input value={timePart(event.startAt)} onChange={e=>updateStart('time',e.target.value)} placeholder="13:00" inputMode="numeric"/></Field><Field label="終了日"><input value={datePart(event.endAt)} onChange={e=>updateEnd('date',e.target.value)} placeholder="2026-07-03" inputMode="numeric"/></Field><Field label="終了時刻"><input value={timePart(event.endAt)} onChange={e=>updateEnd('time',e.target.value)} placeholder="14:00" inputMode="numeric"/></Field><Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
 }
 
 function TaskModal({ task: initial, save, close }: { task: Task; save:(t:Task)=>void; close:()=>void }) {
