@@ -70,7 +70,7 @@ export default function App() {
     <main>
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><button className="quick-add" onClick={() => page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask())}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'タスクを追加'}</button></header>
       <div className="page-wrap">
-        {page === 'home' && <HomePage tasks={tasks} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} complete={complete} acceptInboxItem={acceptInboxItem} dismissInboxItem={dismissInboxItem}/>} 
+        {page === 'home' && <HomePage tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} complete={complete} acceptInboxItem={acceptInboxItem} dismissInboxItem={dismissInboxItem}/>} 
         {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
         {page === 'calendar' && <CalendarPage events={events} add={() => setEditingEvent(blankEvent())} edit={setEditingEvent} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>} 
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
@@ -87,9 +87,16 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ tasks, moodLogs, gptInbox, importNotice, go, complete, acceptInboxItem, dismissInboxItem }: { tasks: Task[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; complete: (id: string) => void; acceptInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
+function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, complete, acceptInboxItem, dismissInboxItem }: { tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; complete: (id: string) => void; acceptInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const plan = dayPlan(tasks, todayMood), incomplete = tasks.filter(t => t.status !== '完了')
+  const workMinutes = plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)
+  const todayEvents = [...events].filter(event => localDate(new Date(event.startAt)) === localDate()).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const upcomingEvents = [...events].filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const nextEvent = todayEvents.find(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000) ?? upcomingEvents[0]
+  const moodLabel = todayMood ? `${moodInfo(todayMood)?.emoji ?? ''} ${moodInfo(todayMood)?.label ?? ''}` : '未記録'
+  const commandTitle = plan.top ? `まずは「${plan.top.title}」を小さく進めましょう。` : nextEvent ? `次の予定「${nextEvent.title}」に合わせて余白を残しましょう。` : '今日は余白を守りながら整えましょう。'
+  const commandBody = nextEvent ? `次の予定は${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}です。作業は予定の前後に詰め込みすぎず、最初の10分だけで十分です。` : todayEvents.length ? '今日は予定があります。タスクは締切が近いものから、短く区切って進めましょう。' : '今日は時間の決まった予定が少なめです。だからこそ、最優先を一つだけ決めて静かに進めましょう。'
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   const guidance = moodGuidance(todayMood)
   return <>
@@ -99,7 +106,8 @@ function HomePage({ tasks, moodLogs, gptInbox, importNotice, go, complete, accep
       const eventTime = item.type === 'event' ? formatEventTime(item) : null
       return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {eventTime?.label} {eventTime?.date} {eventTime?.time}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{item.category} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>{item.type === 'event' ? '予定に追加' : 'タスクに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
     })}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
-    <div className="stats-row"><Stat icon={<CheckCircle2/>} label="未完了タスク" value={`${incomplete.length}`} suffix="件"/><Stat icon={<Clock3/>} label="今日の予定時間" value={`${plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)}`} suffix="分"/><Stat icon={<CalendarDays/>} label="締切間近" value={`${incomplete.filter(t => formatDeadline(t.deadline).urgent).length}`} suffix="件" danger/></div>
+    <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TASKS</span><strong>今日の一手</strong></div>{plan.today.length ? plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>) : <p className="command-empty">急ぎのタスクはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
+    <div className="stats-row"><Stat icon={<CheckCircle2/>} label="未完了タスク" value={`${incomplete.length}`} suffix="件"/><Stat icon={<Clock3/>} label="今日の予定" value={`${todayEvents.length}`} suffix="件"/><Stat icon={<CalendarDays/>} label="締切間近" value={`${incomplete.filter(t => formatDeadline(t.deadline).urgent).length}`} suffix="件" danger/></div>
     <div className="home-grid">
       <section className="card today-card"><div className="section-title"><div><span>TODAY'S FOCUS</span><h2>今日やること</h2></div><button className="text-button" onClick={() => go('tasks')}>すべて見る <ArrowRight size={15}/></button></div>
         <div className="task-stack">{plan.today.length ? plan.today.map((task, i) => <TaskRow key={task.id} task={task} rank={i + 1} complete={complete}/>) : <Empty text="本日のタスクはありません"/>}</div>
@@ -111,6 +119,22 @@ function HomePage({ tasks, moodLogs, gptInbox, importNotice, go, complete, accep
 }
 
 function Stat({ icon, label, value, suffix, danger }: { icon: React.ReactNode; label: string; value: string; suffix: string; danger?: boolean }) { return <div className={`stat ${danger ? 'danger' : ''}`}><div>{icon}</div><span>{label}</span><strong>{value}<small>{suffix}</small></strong></div> }
+
+function CommandEvent({ event }: { event: CalendarEvent }) {
+  const info = formatEventTime(event)
+  return <article className={`command-item command-event ${info.today ? 'today' : ''}`}>
+    <div className="command-time"><Clock3 size={14}/><span>{info.time}</span></div>
+    <div className="command-main"><strong>{event.title}</strong><p>{info.label} {info.date}{event.location ? ` ・ ${event.location}` : ''}</p></div>
+  </article>
+}
+
+function CommandTask({ task, index }: { task: Task; index: number }) {
+  const deadline = formatDeadline(task.deadline, true)
+  return <article className="command-item command-task">
+    <div className="command-time"><CheckCircle2 size={14}/><span>{String(index + 1).padStart(2, '0')}</span></div>
+    <div className="command-main"><strong>{task.title}</strong><p>{deadline.label} {deadline.date} ・ 優先度{task.priority} ・ {Math.max(5, Math.round(task.estimatedMinutes * (100 - task.progress) / 100))}分目安</p></div>
+  </article>
+}
 
 function TaskRow({ task, rank, complete }: { task: Task; rank: number; complete: (id: string) => void }) {
   const d = formatDeadline(task.deadline)
