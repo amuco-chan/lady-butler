@@ -28,8 +28,8 @@ export default function App() {
     return existing ? prev.map(log => log.date === date ? { ...log, mood, memo, updatedAt: now } : log) : [{ id: crypto.randomUUID(), date, mood, memo, createdAt: now, updatedAt: now }, ...prev]
   })
   const saveDiary = (entry: DiaryEntry) => setDiaries(prev => prev.some(item => item.date === entry.date) ? prev.map(item => item.date === entry.date ? entry : item) : [entry, ...prev])
-  const acceptInboxItem = (item: GptInboxItem) => { setTasks(prev => [...prev, inboxItemToTask(item)]); setGptInbox(prev => prev.filter(candidate => candidate.id !== item.id)) }
-  const dismissInboxItem = (id: string) => setGptInbox(prev => prev.filter(item => item.id !== id))
+  const acceptInboxItem = (item: GptInboxItem) => { setTasks(prev => [...prev, inboxItemToTask(item)]); setGptInbox(prev => prev.filter(candidate => candidate.id !== item.id)); setImportNotice('') }
+  const dismissInboxItem = (id: string) => { setGptInbox(prev => prev.filter(item => item.id !== id)); setImportNotice('') }
 
   useEffect(() => {
     const incoming = parseGptImportHash(window.location.hash)
