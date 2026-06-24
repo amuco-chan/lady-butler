@@ -2,10 +2,8 @@ export type Category = '課題' | '授業' | '生活' | 'バイト' | '予定' |
 export type Priority = '高' | '中' | '低'
 export type Status = '未着手' | '進行中' | '完了' | '保留'
 export type Progress = 0 | 25 | 50 | 75 | 100
-export type Page = 'home' | 'tasks' | 'chat' | 'diary' | 'assignment' | 'settings'
-export type ChatMode = '通常相談' | 'タスク相談' | '課題サポート' | '進捗報告'
+export type Page = 'home' | 'tasks' | 'diary' | 'settings'
 export type Mood = 'very_good' | 'good' | 'normal' | 'tired' | 'exhausted'
-export type AiMode = 'free_gpt' | 'auto_api'
 
 export interface Task {
   id: string
@@ -21,21 +19,12 @@ export interface Task {
   updatedAt: string
 }
 
-export interface ChatMessage {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  createdAt: string
-  mode: ChatMode
-}
 
 export interface Settings {
   tone: '執事' | 'やさしい' | '簡潔' | 'イケメン'
   strictness: 'やさしめ' | '標準' | '厳しめ'
   notifications: '少なめ' | '標準' | '多め'
   name: string
-  aiMode: AiMode
-  aiAccessToken: string
 }
 
 export interface MoodLog {
