@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Edit3, Home, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, X } from 'lucide-react'
-import type { DiaryEntry, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { dayPlan, defaultSettings, formatDeadline, localDate, makeDiaryComment, moodGuidance, moodInfo, moodOptions, rankedTasks, sampleTasks, toLocalDateTimeValue, useStoredState } from './lib'
+import { useEffect, useState } from 'react'
+import { Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Edit3, Home, Inbox, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, X } from 'lucide-react'
+import type { DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
+import { dayPlan, defaultSettings, formatDeadline, inboxItemToTask, localDate, makeDiaryComment, moodGuidance, moodInfo, moodOptions, parseGptImportHash, rankedTasks, sampleTasks, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'タスク', icon: CheckCircle2 },
@@ -15,8 +15,10 @@ export default function App() {
   const [tasks, setTasks] = useStoredState<Task[]>('lady.tasks', sampleTasks)
   const [moodLogs, setMoodLogs] = useStoredState<MoodLog[]>('lady.moods', [])
   const [diaries, setDiaries] = useStoredState<DiaryEntry[]>('lady.diaries', [])
+  const [gptInbox, setGptInbox] = useStoredState<GptInboxItem[]>('lady.gptInbox', [])
   const [settings, setSettings] = useStoredState<Settings>('lady.settings', defaultSettings)
   const [editing, setEditing] = useState<Task | null>(null)
+  const [importNotice, setImportNotice] = useState('')
   const [menu, setMenu] = useState(false)
   const changePage = (p: Page) => { setPage(p); setMenu(false) }
   const saveTask = (task: Task) => { setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task]); setEditing(null) }
@@ -26,6 +28,19 @@ export default function App() {
     return existing ? prev.map(log => log.date === date ? { ...log, mood, memo, updatedAt: now } : log) : [{ id: crypto.randomUUID(), date, mood, memo, createdAt: now, updatedAt: now }, ...prev]
   })
   const saveDiary = (entry: DiaryEntry) => setDiaries(prev => prev.some(item => item.date === entry.date) ? prev.map(item => item.date === entry.date ? entry : item) : [entry, ...prev])
+  const acceptInboxItem = (item: GptInboxItem) => { setTasks(prev => [...prev, inboxItemToTask(item)]); setGptInbox(prev => prev.filter(candidate => candidate.id !== item.id)) }
+  const dismissInboxItem = (id: string) => setGptInbox(prev => prev.filter(item => item.id !== id))
+
+  useEffect(() => {
+    const incoming = parseGptImportHash(window.location.hash)
+    if (!incoming.length) return
+    setGptInbox(prev => {
+      const seen = new Set(prev.map(item => `${item.type}:${item.title}:${item.deadline}:${item.sourceText}`))
+      return [...incoming.filter(item => !seen.has(`${item.type}:${item.title}:${item.deadline}:${item.sourceText}`)), ...prev]
+    })
+    setImportNotice(`${incoming.length}件の候補をGPT受信箱に入れました。内容を確認してから追加できます。`)
+    history.replaceState(null, '', `${location.pathname}${location.search}`)
+  }, [setGptInbox])
 
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? 'open' : ''}`}>
@@ -38,7 +53,7 @@ export default function App() {
     <main>
       <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><button className="quick-add" onClick={() => setEditing(blankTask())}><Plus size={17}/>タスクを追加</button></header>
       <div className="page-wrap">
-        {page === 'home' && <HomePage tasks={tasks} moodLogs={moodLogs} go={changePage} complete={complete}/>} 
+        {page === 'home' && <HomePage tasks={tasks} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} complete={complete} acceptInboxItem={acceptInboxItem} dismissInboxItem={dismissInboxItem}/>} 
         {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} clear={() => { localStorage.clear(); location.reload() }}/>} 
@@ -53,7 +68,7 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ tasks, moodLogs, go, complete }: { tasks: Task[]; moodLogs: MoodLog[]; go: (p: Page) => void; complete: (id: string) => void }) {
+function HomePage({ tasks, moodLogs, gptInbox, importNotice, go, complete, acceptInboxItem, dismissInboxItem }: { tasks: Task[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; complete: (id: string) => void; acceptInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const plan = dayPlan(tasks, todayMood), incomplete = tasks.filter(t => t.status !== '完了')
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
@@ -61,6 +76,7 @@ function HomePage({ tasks, moodLogs, go, complete }: { tasks: Task[]; moodLogs: 
   return <>
     <PageHeading eyebrow={date} title="お帰りなさいませ、レディ。">本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
     <section className="butler-callout"><div className="butler-mark"><Sparkles/></div><div><span>THE BUTLER'S NOTE</span><h2>{plan.top ? `本日の最優先は「${plan.top.title}」です。` : '本日の予定はすべて片づいております。'}</h2><p>{todayMood ? guidance : plan.top ? `完璧を目指す必要はありません。まず10分で「${plan.top.category === '課題' ? '資料を開き、見出しを3つ作る' : '必要なものを1つ開く'}」ところから始めましょう。` : '少し休むか、明日の準備をひとつだけしておきましょう。'}</p></div></section>
+    {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT INBOX</span><h2>GPTから届いた候補</h2></div><small>{gptInbox.length}件</small></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong><span>{item.category} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>タスクに追加</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>)}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
     <div className="stats-row"><Stat icon={<CheckCircle2/>} label="未完了タスク" value={`${incomplete.length}`} suffix="件"/><Stat icon={<Clock3/>} label="今日の予定時間" value={`${plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)}`} suffix="分"/><Stat icon={<CalendarDays/>} label="締切間近" value={`${incomplete.filter(t => formatDeadline(t.deadline).urgent).length}`} suffix="件" danger/></div>
     <div className="home-grid">
       <section className="card today-card"><div className="section-title"><div><span>TODAY'S FOCUS</span><h2>今日やること</h2></div><button className="text-button" onClick={() => go('tasks')}>すべて見る <ArrowRight size={15}/></button></div>
@@ -114,7 +130,8 @@ function Field({ label, children, wide, required }: { label:string; children:Rea
 
 function SettingsPage({ settings, setSettings, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; clear:()=>void }) {
   const update=<K extends keyof Settings>(k:K,v:Settings[K])=>setSettings(p=>({...defaultSettings,...p,[k]:v}))
-  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
+  const actionSchemaUrl = `${location.origin}/gpt-action-openapi.json`
+  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section gpt-link-section"><div><h2>GPT連携</h2><p>あなたのCustom GPTのActionsにこのURLを登録すると、GPTで話した課題や予定をアプリの受信箱へ送れるようになります。</p></div><div className="gpt-link-box"><code>{actionSchemaUrl}</code><button onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>URLをコピー</button><small>GPTが返す追加リンクを開くと、この端末の受信箱に入ります。勝手にタスク確定はしません。</small></div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
 }
 
 function TaskModal({ task: initial, save, close }: { task: Task; save:(t:Task)=>void; close:()=>void }) {
