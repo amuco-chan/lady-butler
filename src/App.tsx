@@ -18,6 +18,12 @@ const blankEvent = (): CalendarEvent => {
   return { id: crypto.randomUUID(), title: '', startAt: toLocalDateTimeValue(start), endAt: toLocalDateTimeValue(end), location: '', memo: '', createdAt: now, updatedAt: now }
 }
 
+const eventDurationMinutes = (event: Pick<CalendarEvent, 'startAt' | 'endAt'>) => {
+  const start = new Date(event.startAt).getTime(), end = new Date(event.endAt).getTime()
+  if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0
+  return Math.min(24 * 60, Math.round((end - start) / 60000))
+}
+
 type AppBackup = {
   version?: number
   exportedAt?: string
@@ -112,14 +118,21 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
 
 function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, complete, acceptInboxItem, dismissInboxItem }: { tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; complete: (id: string) => void; acceptInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
-  const plan = dayPlan(tasks, todayMood), incomplete = tasks.filter(t => t.status !== '完了')
-  const workMinutes = plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)
+  const basePlan = dayPlan(tasks, todayMood), incomplete = tasks.filter(t => t.status !== '完了')
   const todayEvents = [...events].filter(event => localDate(new Date(event.startAt)) === localDate()).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
   const upcomingEvents = [...events].filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const todayEventMinutes = todayEvents.reduce((sum, event) => sum + eventDurationMinutes(event), 0)
+  const scheduleLoad = todayEventMinutes >= 240 || todayEvents.length >= 3 ? 'heavy' : todayEventMinutes >= 120 || todayEvents.length >= 2 ? 'medium' : 'light'
+  const taskLimit = basePlan.today.length === 0 ? 0 : scheduleLoad === 'heavy' ? (todayMood === 'very_good' || todayMood === 'good' ? 2 : 1) : scheduleLoad === 'medium' ? Math.max(1, basePlan.today.length - 1) : basePlan.today.length
+  const plan = { ...basePlan, today: basePlan.today.slice(0, taskLimit), extra: [...basePlan.today.slice(taskLimit), ...basePlan.extra] }
+  const deferredBySchedule = Math.max(0, basePlan.today.length - plan.today.length)
+  const workMinutes = plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)
   const nextEvent = todayEvents.find(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000) ?? upcomingEvents[0]
   const moodLabel = todayMood ? `${moodInfo(todayMood)?.emoji ?? ''} ${moodInfo(todayMood)?.label ?? ''}` : '未記録'
+  const loadLabel = scheduleLoad === 'heavy' ? '詰め込み禁止' : scheduleLoad === 'medium' ? '軽め運転' : '余白あり'
+  const loadAdvice = scheduleLoad === 'heavy' ? '今日は予定の密度が高めです。タスクは最優先だけに絞り、予定の前後へ作業を詰め込まないでください。' : scheduleLoad === 'medium' ? '今日は予定も作業もある日です。タスクは少し減らし、移動や休憩の余白を残しましょう。' : '今日は予定の圧迫が少なめです。最優先を一つ決めて、静かに進めましょう。'
   const commandTitle = plan.top ? `まずは「${plan.top.title}」を小さく進めましょう。` : nextEvent ? `次の予定「${nextEvent.title}」に合わせて余白を残しましょう。` : '今日は余白を守りながら整えましょう。'
-  const commandBody = nextEvent ? `次の予定は${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}です。作業は予定の前後に詰め込みすぎず、最初の10分だけで十分です。` : todayEvents.length ? '今日は予定があります。タスクは締切が近いものから、短く区切って進めましょう。' : '今日は時間の決まった予定が少なめです。だからこそ、最優先を一つだけ決めて静かに進めましょう。'
+  const commandBody = nextEvent ? `次の予定は${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}です。${loadAdvice}` : loadAdvice
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
   const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 7)
   const weekTasks = rankedTasks(tasks).filter(task => {
@@ -147,7 +160,7 @@ function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, complet
       const eventTime = item.type === 'event' ? formatEventTime(item) : null
       return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {eventTime?.label} {eventTime?.date} {eventTime?.time}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{item.category} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>{item.type === 'event' ? '予定に追加' : 'タスクに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
     })}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
-    <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TASKS</span><strong>今日の一手</strong></div>{plan.today.length ? plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>) : <p className="command-empty">急ぎのタスクはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
+    <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TASKS</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのタスクはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
     <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
     <div className="stats-row"><Stat icon={<CheckCircle2/>} label="未完了タスク" value={`${incomplete.length}`} suffix="件"/><Stat icon={<Clock3/>} label="今日の予定" value={`${todayEvents.length}`} suffix="件"/><Stat icon={<CalendarDays/>} label="締切間近" value={`${incomplete.filter(t => formatDeadline(t.deadline).urgent).length}`} suffix="件" danger/></div>
     <div className="home-grid">
