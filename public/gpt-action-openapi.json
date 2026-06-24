@@ -1,0 +1,96 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lady Butler GPT Inbox",
+    "description": "Send task candidates from a Custom GPT conversation to the Lady Butler app. The API returns an import URL; the user must open it and confirm before the task is saved.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://lady-butler.vercel.app"
+    }
+  ],
+  "paths": {
+    "/api/gpt-inbox": {
+      "post": {
+        "operationId": "sendTaskCandidatesToLadyButler",
+        "summary": "Send task candidates to Lady Butler",
+        "description": "Use this when the user mentions a task, assignment, deadline, appointment, errand, or something they may want to track in Lady Butler. Return the importUrl to the user and ask them to open it to review the candidates.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceText": {
+                    "type": "string",
+                    "description": "Short quote or paraphrase of what the user said."
+                  },
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "title": {
+                          "type": "string",
+                          "description": "Short task title in Japanese."
+                        },
+                        "deadline": {
+                          "type": "string",
+                          "description": "Deadline in ISO format. Prefer YYYY-MM-DDTHH:mm or YYYY-MM-DD. If unknown, omit it."
+                        },
+                        "category": {
+                          "type": "string",
+                          "enum": ["課題", "授業", "生活", "バイト", "予定", "買い物", "その他"]
+                        },
+                        "priority": {
+                          "type": "string",
+                          "enum": ["高", "中", "低"]
+                        },
+                        "estimatedMinutes": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 720,
+                          "description": "Rough effort estimate in minutes."
+                        },
+                        "memo": {
+                          "type": "string",
+                          "description": "Useful note such as class name, report condition, first step, or uncertainty."
+                        }
+                      },
+                      "required": ["title"]
+                    }
+                  }
+                },
+                "required": ["items"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import URL generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "count": { "type": "integer" },
+                    "importUrl": {
+                      "type": "string",
+                      "description": "Open this URL to import the candidates into Lady Butler."
+                    },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
