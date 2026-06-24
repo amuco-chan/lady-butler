@@ -59,6 +59,21 @@ export function dayPlan(tasks: Task[], mood?: Mood) {
   return { top: ranked[0], today: ranked.slice(0, count), extra: ranked.slice(count, count + 2), later: ranked.slice(count + 2) }
 }
 
+export type ScheduleLoad = 'light' | 'medium' | 'heavy'
+
+export function scheduleLoadFor(eventCount: number, eventMinutes: number): ScheduleLoad {
+  if (eventMinutes >= 240 || eventCount >= 3) return 'heavy'
+  if (eventMinutes >= 120 || eventCount >= 2) return 'medium'
+  return 'light'
+}
+
+export function taskLimitForSchedule(taskCount: number, mood: Mood | undefined, load: ScheduleLoad) {
+  if (taskCount === 0) return 0
+  if (load === 'heavy') return mood === 'very_good' || mood === 'good' ? Math.min(2, taskCount) : 1
+  if (load === 'medium') return Math.max(1, taskCount - 1)
+  return taskCount
+}
+
 export function formatDeadline(value: string, compact = false) {
   const d = new Date(value)
   const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate())
