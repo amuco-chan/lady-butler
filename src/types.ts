@@ -48,3 +48,16 @@ export interface DiaryEntry {
   createdAt: string
   updatedAt: string
 }
+
+export interface GptInboxItem {
+  id: string
+  type: 'task'
+  title: string
+  deadline: string
+  category: Category
+  priority: Priority
+  estimatedMinutes: number
+  memo: string
+  sourceText: string
+  createdAt: string
+}
