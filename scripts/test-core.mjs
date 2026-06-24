@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { dayPlan, defaultSettings, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks } from '../src/lib.ts'
+import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks } from '../src/lib.ts'
 
 assert.equal(defaultSettings.name, 'レディ')
 assert.equal(defaultSettings.tone, '執事')
@@ -34,5 +34,17 @@ assert.equal(gptItems[0].deadline, '2026-06-26T23:59')
 const importedTask = inboxItemToTask(gptItems[0])
 assert.equal(importedTask.title, '心理学レポートを書く')
 assert.equal(importedTask.status, '未着手')
+
+const gptEventItems = normalizeGptInboxPayload({
+  sourceText: '明日15時から美容院なんだよね',
+  events: [{ title: '美容院', startAt: '2026-06-25T15:00', endAt: '2026-06-25T16:00', location: '駅前' }],
+})
+assert.equal(gptEventItems.length, 1)
+assert.equal(gptEventItems[0].type, 'event')
+assert.equal(gptEventItems[0].startAt, '2026-06-25T15:00')
+const importedEvent = inboxItemToEvent(gptEventItems[0])
+assert.equal(importedEvent.title, '美容院')
+assert.equal(importedEvent.location, '駅前')
+assert.match(formatEventTime(importedEvent).time, /15:00/)
 
 console.log('コア機能テスト: OK')
