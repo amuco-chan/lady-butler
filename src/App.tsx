@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, X } from 'lucide-react'
+import { Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Download, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
 import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodGuidance, moodInfo, moodOptions, parseGptImportHash, rankedTasks, sampleTasks, toLocalDateTimeValue, useStoredState } from './lib'
 
@@ -16,6 +16,17 @@ const blankEvent = (): CalendarEvent => {
   const end = new Date(start.getTime() + 60 * 60 * 1000)
   const now = new Date().toISOString()
   return { id: crypto.randomUUID(), title: '', startAt: toLocalDateTimeValue(start), endAt: toLocalDateTimeValue(end), location: '', memo: '', createdAt: now, updatedAt: now }
+}
+
+type AppBackup = {
+  version?: number
+  exportedAt?: string
+  tasks?: Task[]
+  events?: CalendarEvent[]
+  moodLogs?: MoodLog[]
+  diaries?: DiaryEntry[]
+  gptInbox?: GptInboxItem[]
+  settings?: Settings
 }
 
 export default function App() {
@@ -46,6 +57,18 @@ export default function App() {
     setImportNotice('')
   }
   const dismissInboxItem = (id: string) => { setGptInbox(prev => prev.filter(item => item.id !== id)); setImportNotice('') }
+  const backup: AppBackup = { version: 1, tasks, events, moodLogs, diaries, gptInbox, settings }
+  const restoreBackup = (data: AppBackup) => {
+    if (!data || typeof data !== 'object') throw new Error('バックアップの形式が読み取れません。')
+    if (!confirm('バックアップを読み込みます。現在この端末にあるデータは上書きされます。よろしいですか？')) return false
+    setTasks(Array.isArray(data.tasks) ? data.tasks : [])
+    setEvents(Array.isArray(data.events) ? data.events : [])
+    setMoodLogs(Array.isArray(data.moodLogs) ? data.moodLogs : [])
+    setDiaries(Array.isArray(data.diaries) ? data.diaries : [])
+    setGptInbox(Array.isArray(data.gptInbox) ? data.gptInbox : [])
+    setSettings({ ...defaultSettings, ...(data.settings && typeof data.settings === 'object' ? data.settings : {}) })
+    return true
+  }
 
   useEffect(() => {
     const incoming = parseGptImportHash(window.location.hash)
@@ -74,7 +97,7 @@ export default function App() {
         {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
         {page === 'calendar' && <CalendarPage events={events} add={() => setEditingEvent(blankEvent())} edit={setEditingEvent} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>} 
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
-        {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} clear={() => { localStorage.clear(); location.reload() }}/>} 
+        {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>} 
       </div>
     </main>
     <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && events.filter(event => localDate(new Date(event.startAt)) === localDate()).length > 0 && <em>{events.filter(event => localDate(new Date(event.startAt)) === localDate()).length}</em>}</button>)}</nav>
@@ -97,6 +120,24 @@ function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, complet
   const moodLabel = todayMood ? `${moodInfo(todayMood)?.emoji ?? ''} ${moodInfo(todayMood)?.label ?? ''}` : '未記録'
   const commandTitle = plan.top ? `まずは「${plan.top.title}」を小さく進めましょう。` : nextEvent ? `次の予定「${nextEvent.title}」に合わせて余白を残しましょう。` : '今日は余白を守りながら整えましょう。'
   const commandBody = nextEvent ? `次の予定は${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}です。作業は予定の前後に詰め込みすぎず、最初の10分だけで十分です。` : todayEvents.length ? '今日は予定があります。タスクは締切が近いものから、短く区切って進めましょう。' : '今日は時間の決まった予定が少なめです。だからこそ、最優先を一つだけ決めて静かに進めましょう。'
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
+  const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 7)
+  const weekTasks = rankedTasks(tasks).filter(task => {
+    const time = new Date(task.deadline).getTime()
+    return !Number.isNaN(time) && time <= weekEnd.getTime()
+  }).slice(0, 5)
+  const weekEvents = [...events].filter(event => {
+    const start = new Date(event.startAt).getTime(), end = new Date(event.endAt).getTime()
+    return !Number.isNaN(start) && !Number.isNaN(end) && end >= todayStart.getTime() && start <= weekEnd.getTime()
+  }).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt)).slice(0, 5)
+  const lowMoodDays = moodLogs.filter(log => {
+    const date = new Date(`${log.date}T00:00:00`).getTime()
+    return !Number.isNaN(date) && date >= todayStart.getTime() - 6 * 86400000 && (moodInfo(log.mood)?.score ?? 3) <= 2
+  }).length
+  const weekMinutes = weekTasks.reduce((sum, task) => sum + Math.round(task.estimatedMinutes * (100 - task.progress) / 100), 0)
+  const urgentWeekTasks = weekTasks.filter(task => formatDeadline(task.deadline).urgent).length
+  const weekMode = lowMoodDays >= 2 ? '回復を守る週' : urgentWeekTasks >= 2 ? '締切処理の週' : weekEvents.length >= 3 ? '予定に合わせる週' : '前倒しできる週'
+  const weekAdvice = lowMoodDays >= 2 ? 'ここ数日は気分が低めです。今週は増やすより、締切と休息の両方を守る設計にしましょう。' : urgentWeekTasks >= 2 ? '近い締切が重なっています。大きく進めるより、提出ラインを先に作るのが安全です。' : weekEvents.length >= 3 ? '予定がやや多めです。空いている日にタスクを寄せ、予定のある日は軽くしておきましょう。' : '今週は少し前倒しできます。余力がある日に、重い課題の最初の一手だけ置いておきましょう。'
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   const guidance = moodGuidance(todayMood)
   return <>
@@ -107,6 +148,7 @@ function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, complet
       return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {eventTime?.label} {eventTime?.date} {eventTime?.time}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{item.category} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>{item.type === 'event' ? '予定に追加' : 'タスクに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
     })}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
     <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TASKS</span><strong>今日の一手</strong></div>{plan.today.length ? plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>) : <p className="command-empty">急ぎのタスクはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
+    <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
     <div className="stats-row"><Stat icon={<CheckCircle2/>} label="未完了タスク" value={`${incomplete.length}`} suffix="件"/><Stat icon={<Clock3/>} label="今日の予定" value={`${todayEvents.length}`} suffix="件"/><Stat icon={<CalendarDays/>} label="締切間近" value={`${incomplete.filter(t => formatDeadline(t.deadline).urgent).length}`} suffix="件" danger/></div>
     <div className="home-grid">
       <section className="card today-card"><div className="section-title"><div><span>TODAY'S FOCUS</span><h2>今日やること</h2></div><button className="text-button" onClick={() => go('tasks')}>すべて見る <ArrowRight size={15}/></button></div>
@@ -134,6 +176,20 @@ function CommandTask({ task, index }: { task: Task; index: number }) {
     <div className="command-time"><CheckCircle2 size={14}/><span>{String(index + 1).padStart(2, '0')}</span></div>
     <div className="command-main"><strong>{task.title}</strong><p>{deadline.label} {deadline.date} ・ 優先度{task.priority} ・ {Math.max(5, Math.round(task.estimatedMinutes * (100 - task.progress) / 100))}分目安</p></div>
   </article>
+}
+
+function WeekPlanCard({ mode, advice, tasks, events, minutes, lowMoodDays, go }: { mode: string; advice: string; tasks: Task[]; events: CalendarEvent[]; minutes: number; lowMoodDays: number; go: (p: Page) => void }) {
+  const topTask = tasks[0], nextEvent = events[0]
+  return <section className="card week-card">
+    <div className="section-title"><div><span>WEEK STRATEGY</span><h2>今週の作戦</h2></div><button className="text-button" onClick={() => go('tasks')}>タスクを見る <ArrowRight size={15}/></button></div>
+    <div className="week-grid">
+      <div className="week-brief"><span>MODE</span><h3>{mode}</h3><p>{advice}</p><div className="week-metrics"><b>7日以内のタスク {tasks.length}件</b><b>予定 {events.length}件</b><b>作業目安 {minutes}分</b>{lowMoodDays > 0 && <b>低め気分 {lowMoodDays}日</b>}</div></div>
+      <div className="week-next">
+        <div><span>NEXT MOVE</span><strong>{topTask ? `まず「${topTask.title}」` : nextEvent ? `次は「${nextEvent.title}」` : '今週は整える余白あり'}</strong></div>
+        <p>{topTask ? `${formatDeadline(topTask.deadline).label} ${formatDeadline(topTask.deadline).date}。完成ではなく、提出ラインを作るところからで十分です。` : nextEvent ? `${formatEventTime(nextEvent).label} ${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}。準備を一つだけ先に置きましょう。` : '急ぎの締切はありません。日記か予定の整理を少しだけしておきましょう。'}</p>
+      </div>
+    </div>
+  </section>
 }
 
 function TaskRow({ task, rank, complete }: { task: Task; rank: number; complete: (id: string) => void }) {
@@ -204,10 +260,31 @@ function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodL
 
 function Field({ label, children, wide, required }: { label:string; children:React.ReactNode; wide?:boolean; required?:boolean }) { return <label className={wide?'field wide':'field'}><span>{label}{required&&<b>*</b>}</span>{children}</label> }
 
-function SettingsPage({ settings, setSettings, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; clear:()=>void }) {
+function SettingsPage({ settings, setSettings, backup, restore, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; backup: AppBackup; restore:(data: AppBackup)=>boolean; clear:()=>void }) {
+  const [backupMessage, setBackupMessage] = useState('')
   const update=<K extends keyof Settings>(k:K,v:Settings[K])=>setSettings(p=>({...defaultSettings,...p,[k]:v}))
   const actionSchemaUrl = `${location.origin}/gpt-action-openapi.json`
-  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section gpt-link-section"><div><h2>GPT連携</h2><p>あなたのCustom GPTのActionsにこのURLを登録すると、GPTで話した課題や予定をアプリの受信箱へ送れるようになります。</p></div><div className="gpt-link-box"><code>{actionSchemaUrl}</code><button onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>URLをコピー</button><small>GPTが返す追加リンクを開くと、この端末の受信箱に入ります。勝手に保存確定はしません。</small></div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、予定、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
+  const exportBackup = () => {
+    const data: AppBackup = { ...backup, version: 1, exportedAt: new Date().toISOString(), settings }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `lady-butler-backup-${localDate()}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    setBackupMessage('バックアップを書き出しました。スマホやPCの安全な場所に保管してください。')
+  }
+  const importBackup = async (file?: File | null) => {
+    if (!file) return
+    try {
+      const parsed = JSON.parse(await file.text()) as AppBackup
+      const restored = restore(parsed)
+      setBackupMessage(restored ? 'バックアップを読み込みました。執事の記憶を復元しました。' : '読み込みをキャンセルしました。')
+    } catch {
+      setBackupMessage('読み込めませんでした。Lady ButlerのバックアップJSONか確認してください。')
+    }
+  }
+  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section gpt-link-section"><div><h2>GPT連携</h2><p>あなたのCustom GPTのActionsにこのURLを登録すると、GPTで話した課題や予定をアプリの受信箱へ送れるようになります。</p></div><div className="gpt-link-box"><code>{actionSchemaUrl}</code><button onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>URLをコピー</button><small>GPTが返す追加リンクを開くと、この端末の受信箱に入ります。勝手に保存確定はしません。</small></div></div><div className="settings-section backup-section"><div><h2>バックアップ</h2><p>タスク、予定、日記、気分ログ、GPT受信箱をJSONで保存・復元できます。機種変更やスマホ利用前の保険です。</p></div><div className="backup-box"><div className="backup-actions"><button type="button" onClick={exportBackup}><Download size={15}/>書き出す</button><label><Upload size={15}/>読み込む<input type="file" accept="application/json,.json" onChange={e=>{ importBackup(e.target.files?.[0]); e.currentTarget.value='' }}/></label></div><small>{backupMessage || 'この端末の保存データだけを扱います。クラウド同期ではありません。'}</small></div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、予定、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
 }
 
 function EventModal({ event: initial, save, close }: { event: CalendarEvent; save:(event:CalendarEvent)=>void; close:()=>void }) {
