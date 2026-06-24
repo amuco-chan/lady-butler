@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { DiaryEntry, Mood, MoodLog, Settings, Task } from './types'
+import type { Category, DiaryEntry, GptInboxItem, Mood, MoodLog, Priority, Settings, Task } from './types'
 
 const todayAt = (hour: number, addDays = 0) => {
   const date = new Date()
@@ -30,6 +30,8 @@ export function useStoredState<T>(key: string, initial: T): [T, React.Dispatch<R
 }
 
 export const priorityWeight = { 高: 3, 中: 2, 低: 1 } as const
+export const categories: Category[] = ['課題', '授業', '生活', 'バイト', '予定', '買い物', 'その他']
+export const priorities: Priority[] = ['高', '中', '低']
 
 export function rankedTasks(tasks: Task[]) {
   return tasks.filter(t => t.status !== '完了').sort((a, b) => {
@@ -93,4 +95,105 @@ export function makeDiaryComment(entry: Pick<DiaryEntry, 'mood' | 'doneToday' | 
   const carry = entry.carryOver.trim() || '明日の最優先を一つ決めること'
   const ending = entry.mood === 'exhausted' ? '今夜は回復が仕事です。必要なら、信頼できる方に一言だけでもお伝えください。' : entry.mood === 'tired' ? '明日は10分だけ着手できれば十分です。' : '本日の前進を、明日の最初の一手につなげましょう。'
   return `レディ、本日できたことは「${done}」です。完璧でなくとも、これは前進です。\n\nしんどかった点は「${hard}」。ここは根性で押し切るより、負担として認めるのが現実的です。\n\n明日に回すのは「${carry}」。最初から全部ではなく、もっとも小さな一手から始めましょう。\n\n${ending}`
+}
+
+const textOf = (value: unknown) => typeof value === 'string' ? value.trim() : ''
+
+export function normalizeCategory(value: unknown, title = ''): Category {
+  const text = textOf(value)
+  if (categories.includes(text as Category)) return text as Category
+  if (/課題|レポート|提出|宿題|発表|論文/.test(`${text} ${title}`)) return '課題'
+  if (/授業|講義|ゼミ|出席/.test(`${text} ${title}`)) return '授業'
+  if (/買|購入|注文/.test(`${text} ${title}`)) return '買い物'
+  if (/バイト|勤務|シフト/.test(`${text} ${title}`)) return 'バイト'
+  if (/予定|予約|面談|病院/.test(`${text} ${title}`)) return '予定'
+  if (/掃除|洗濯|生活|家事/.test(`${text} ${title}`)) return '生活'
+  return 'その他'
+}
+
+export function normalizePriority(value: unknown): Priority {
+  const text = textOf(value)
+  if (priorities.includes(text as Priority)) return text as Priority
+  if (/高|急|重要|最優先|やば|危険/.test(text)) return '高'
+  if (/低|余裕|いつでも/.test(text)) return '低'
+  return '中'
+}
+
+export function normalizeDeadline(value: unknown) {
+  const fallback = new Date(Date.now() + 86400000)
+  fallback.setHours(23, 59, 0, 0)
+  const text = textOf(value)
+  if (!text) return toLocalDateTimeValue(fallback)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text}T23:59`
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) return text
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:/.test(text)) {
+    const date = new Date(text)
+    if (!Number.isNaN(date.getTime())) return toLocalDateTimeValue(date)
+  }
+  const date = new Date(text)
+  return Number.isNaN(date.getTime()) ? toLocalDateTimeValue(fallback) : toLocalDateTimeValue(date)
+}
+
+export function normalizeEstimatedMinutes(value: unknown) {
+  const number = typeof value === 'number' ? value : Number.parseInt(textOf(value), 10)
+  if (!Number.isFinite(number)) return 60
+  return Math.min(720, Math.max(5, Math.round(number / 5) * 5))
+}
+
+export function normalizeGptInboxPayload(payload: unknown, now = new Date().toISOString()): GptInboxItem[] {
+  const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
+  const rawItems = Array.isArray(root.items) ? root.items : Array.isArray(root.tasks) ? root.tasks : root.title || root.task ? [root.task && typeof root.task === 'object' ? root.task : root] : []
+  const sourceText = textOf(root.sourceText || root.source_text || root.originalText || root.original_text)
+  return rawItems.flatMap((item) => {
+    const raw = item && typeof item === 'object' ? item as Record<string, unknown> : {}
+    const title = textOf(raw.title || raw.name)
+    if (!title) return []
+    const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
+    const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
+    return [{
+      id: crypto.randomUUID(),
+      type: 'task' as const,
+      title,
+      deadline: normalizeDeadline(raw.deadline || raw.dueDate || raw.due_date),
+      category: normalizeCategory(raw.category, title),
+      priority: normalizePriority(raw.priority),
+      estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
+      memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたタスク候補'),
+      sourceText: itemSource,
+      createdAt: now,
+    }]
+  })
+}
+
+export function parseGptImportHash(hash: string) {
+  const clean = hash.startsWith('#') ? hash.slice(1) : hash
+  const token = new URLSearchParams(clean).get('gpt-import')
+  if (!token) return []
+  try {
+    const base64 = token.replace(/-/g, '+').replace(/_/g, '/')
+    const padded = `${base64}${'='.repeat((4 - base64.length % 4) % 4)}`
+    const binary = atob(padded)
+    const bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
+    const json = new TextDecoder().decode(bytes)
+    return normalizeGptInboxPayload(JSON.parse(json))
+  } catch {
+    return []
+  }
+}
+
+export function inboxItemToTask(item: GptInboxItem): Task {
+  const now = new Date().toISOString()
+  return {
+    id: crypto.randomUUID(),
+    title: item.title,
+    deadline: item.deadline,
+    category: item.category,
+    priority: item.priority,
+    progress: 0,
+    estimatedMinutes: item.estimatedMinutes,
+    status: '未着手',
+    memo: item.memo,
+    createdAt: now,
+    updatedAt: now,
+  }
 }
