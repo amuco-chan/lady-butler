@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Download, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Database, Download, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
 import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodGuidance, moodInfo, moodOptions, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
 
@@ -87,6 +87,24 @@ export default function App() {
     setImportNotice(`${incoming.length}件の候補をGPT受信箱に入れました。内容を確認してから追加できます。`)
     history.replaceState(null, '', `${location.pathname}${location.search}`)
   }, [setGptInbox])
+
+  useEffect(() => {
+    const reminderTime = settings.reminderTime || defaultSettings.reminderTime
+    if (!settings.remindersEnabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    const tick = () => {
+      const now = new Date()
+      const current = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+      const key = `lady.reminder.sent.${localDate(now)}.${reminderTime}`
+      if (current !== reminderTime || localStorage.getItem(key)) return
+      const openTasks = tasks.filter(task => task.status !== '完了').length
+      const todayEvents = events.filter(event => localDate(new Date(event.startAt)) === localDate(now)).length
+      new Notification('Lady Butler', { body: `レディ、本日の確認です。未完了タスク${openTasks}件、今日の予定${todayEvents}件。無理なく整えましょう。` })
+      localStorage.setItem(key, 'sent')
+    }
+    tick()
+    const timer = window.setInterval(tick, 30 * 1000)
+    return () => window.clearInterval(timer)
+  }, [settings.remindersEnabled, settings.reminderTime, tasks, events])
 
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? 'open' : ''}`}>
@@ -226,12 +244,21 @@ function CalendarPage({ events, add, edit, remove }: { events: CalendarEvent[]; 
   const past = sorted.filter(event => new Date(event.endAt).getTime() < Date.now() - 60 * 60 * 1000).reverse()
   const todayCount = events.filter(event => localDate(new Date(event.startAt)) === localDate()).length
   const nextEvent = upcoming[0]
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const weekDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(today)
+    date.setDate(today.getDate() + index)
+    const dayEvents = sorted.filter(event => localDate(new Date(event.startAt)) === localDate(date))
+    const minutes = dayEvents.reduce((sum, event) => sum + eventDurationMinutes(event), 0)
+    return { date, events: dayEvents, load: scheduleLoadFor(dayEvents.length, minutes) }
+  })
   return <>
     <PageHeading eyebrow="CALENDAR" title="カレンダー" action={<button className="primary" onClick={add}><Plus size={16}/>予定を追加</button>}>授業、バイト、面談、遊びの約束。タスクではない「時間の決まった予定」を置く場所です。</PageHeading>
     <section className="calendar-hero card">
       <div className="calendar-hero-main"><div className="calendar-orb"><CalendarDays/></div><div><span>SMART SCHEDULE</span><h2>{nextEvent ? `次の予定は「${nextEvent.title}」です。` : 'まだ予定は入っていません。'}</h2><p>{nextEvent ? `${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}。必要な準備だけ、先に一つ置いておきましょう。` : 'GPTで「明日14時に美容院」などと話すと、予定候補としてここへ送れるようになります。'}</p></div></div>
       <div className="calendar-hero-stats"><div><strong>{todayCount}</strong><span>今日の予定</span></div><div><strong>{upcoming.length}</strong><span>今後の予定</span></div></div>
     </section>
+    <section className="card week-calendar-card"><div className="section-title"><div><span>7 DAYS</span><h2>今週の見通し</h2></div><small>予定の密度を先に確認</small></div><div className="week-calendar-grid">{weekDays.map(day => <article key={localDate(day.date)} className={`week-day-card load-${day.load} ${localDate(day.date) === localDate() ? 'today' : ''}`}><div><span>{new Intl.DateTimeFormat('ja-JP', { weekday: 'short' }).format(day.date)}</span><strong>{day.date.getDate()}</strong></div><b>{day.load === 'heavy' ? '詰め込み禁止' : day.load === 'medium' ? '軽め' : '余白あり'}</b>{day.events.length ? <ul>{day.events.slice(0, 2).map(event => <li key={event.id}>{event.title}</li>)}{day.events.length > 2 && <li>ほか{day.events.length - 2}件</li>}</ul> : <p>予定なし</p>}</article>)}</div></section>
     <div className="calendar-layout">
       <section className="card calendar-list-card"><div className="section-title"><div><span>AGENDA</span><h2>これからの予定</h2></div><small>{upcoming.length}件</small></div>{upcoming.length ? <div className="event-list">{upcoming.map(event => <EventRow key={event.id} event={event} edit={edit} remove={remove}/>)}</div> : <Empty text="これからの予定はありません"/>}</section>
       <section className="card calendar-side-card"><div className="section-title"><div><span>GPT FLOW</span><h2>自然文から追加</h2></div></div><div className="calendar-guide"><p>あなたのGPTに、こんなふうに話すだけで大丈夫です。</p><ul><li>「明日15時から美容院なんだよね」</li><li>「金曜の18時にバイト」</li><li>「7月3日13時からゼミ面談、研究室」</li></ul><p>GPTが日時・場所・メモを読み取り、このアプリの受信箱に「予定候補」として送ります。最後にあなたが確認して追加します。</p></div></section>
@@ -275,10 +302,31 @@ function Field({ label, children, wide, required }: { label:string; children:Rea
 
 function SettingsPage({ settings, setSettings, backup, restore, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; backup: AppBackup; restore:(data: AppBackup)=>boolean; clear:()=>void }) {
   const [backupMessage, setBackupMessage] = useState('')
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
+  const effectiveSettings = { ...defaultSettings, ...settings }
   const update=<K extends keyof Settings>(k:K,v:Settings[K])=>setSettings(p=>({...defaultSettings,...p,[k]:v}))
   const actionSchemaUrl = `${location.origin}/gpt-action-openapi.json`
+  const dataForBackup: AppBackup = { ...backup, settings: effectiveSettings }
+  const counts = [
+    ['タスク', backup.tasks?.length ?? 0],
+    ['予定', backup.events?.length ?? 0],
+    ['気分ログ', backup.moodLogs?.length ?? 0],
+    ['日記', backup.diaries?.length ?? 0],
+    ['GPT候補', backup.gptInbox?.length ?? 0],
+  ] as const
+  const dataSize = Math.ceil(new Blob([JSON.stringify(dataForBackup)]).size / 1024)
+  const activityTimes = [...(backup.tasks ?? []), ...(backup.events ?? []), ...(backup.moodLogs ?? []), ...(backup.diaries ?? []), ...(backup.gptInbox ?? [])]
+    .map(item => new Date('updatedAt' in item ? item.updatedAt || item.createdAt : item.createdAt).getTime())
+    .filter(time => !Number.isNaN(time))
+  const lastActivity = activityTimes.length ? new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(Math.max(...activityTimes))) : 'まだなし'
+  const requestNotifications = async () => {
+    if (typeof Notification === 'undefined') { setNotificationStatus('unsupported'); return }
+    const result = await Notification.requestPermission()
+    setNotificationStatus(result)
+    if (result === 'granted') update('remindersEnabled', true)
+  }
   const exportBackup = () => {
-    const data: AppBackup = { ...backup, version: 1, exportedAt: new Date().toISOString(), settings }
+    const data: AppBackup = { ...dataForBackup, version: 1, exportedAt: new Date().toISOString() }
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }))
     const link = document.createElement('a')
     link.href = url
@@ -297,7 +345,18 @@ function SettingsPage({ settings, setSettings, backup, restore, clear }: { setti
       setBackupMessage('読み込めませんでした。Lady ButlerのバックアップJSONか確認してください。')
     }
   }
-  return <><PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading><section className="card settings-card"><div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={settings.name} onChange={e=>update('name',e.target.value)} /></Field></div><div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={settings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={settings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={settings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div><div className="settings-section gpt-link-section"><div><h2>GPT連携</h2><p>あなたのCustom GPTのActionsにこのURLを登録すると、GPTで話した課題や予定をアプリの受信箱へ送れるようになります。</p></div><div className="gpt-link-box"><code>{actionSchemaUrl}</code><button onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>URLをコピー</button><small>GPTが返す追加リンクを開くと、この端末の受信箱に入ります。勝手に保存確定はしません。</small></div></div><div className="settings-section backup-section"><div><h2>バックアップ</h2><p>タスク、予定、日記、気分ログ、GPT受信箱をJSONで保存・復元できます。機種変更やスマホ利用前の保険です。</p></div><div className="backup-box"><div className="backup-actions"><button type="button" onClick={exportBackup}><Download size={15}/>書き出す</button><label><Upload size={15}/>読み込む<input type="file" accept="application/json,.json" onChange={e=>{ importBackup(e.target.files?.[0]); e.currentTarget.value='' }}/></label></div><small>{backupMessage || 'この端末の保存データだけを扱います。クラウド同期ではありません。'}</small></div></div><div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、予定、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div></section></>
+  return <>
+    <PageHeading eyebrow="PREFERENCES" title="設定">執事の振る舞いと、この端末に保存する情報を管理します。</PageHeading>
+    <section className="card settings-card">
+      <div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={effectiveSettings.name} onChange={e=>update('name',e.target.value)} /></Field></div>
+      <div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={effectiveSettings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={effectiveSettings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={effectiveSettings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div>
+      <div className="settings-section notification-section"><div><h2>通知</h2><p>アプリを開いている間、指定時刻に今日の確認を通知します。本格的なスマホPush通知は同期基盤と一緒に作ります。</p></div><div className="notification-box"><div className="setting-controls reminder-controls"><Field label="通知時刻"><input type="time" value={effectiveSettings.reminderTime} onChange={e=>update('reminderTime',e.target.value || defaultSettings.reminderTime)}/></Field><label className="toggle-row"><input type="checkbox" checked={effectiveSettings.remindersEnabled} onChange={e=>update('remindersEnabled',e.target.checked)}/><span>毎日の確認通知</span></label></div><div className="backup-actions"><button type="button" onClick={requestNotifications}><Bell size={15}/>{notificationStatus === 'granted' ? '通知は許可済み' : notificationStatus === 'denied' ? 'ブラウザで通知が拒否中' : '通知を許可'}</button></div><small>{notificationStatus === 'unsupported' ? 'このブラウザでは通知に対応していません。' : 'アプリを開いている間だけ動きます。閉じていても届く通知は次の段階です。'}</small></div></div>
+      <div className="settings-section data-section"><div><h2>データ診断</h2><p>同期へ進む前に、今この端末にどれくらい記録があるか確認できます。</p></div><div className="data-health"><div>{counts.map(([label, value]) => <article key={label}><Database size={15}/><span>{label}</span><strong>{value}</strong></article>)}</div><small>保存サイズ 約{dataSize}KB ・ 最新更新 {lastActivity}</small></div></div>
+      <div className="settings-section gpt-link-section"><div><h2>GPT連携</h2><p>あなたのCustom GPTのActionsにこのURLを登録すると、GPTで話した課題や予定をアプリの受信箱へ送れるようになります。</p></div><div className="gpt-link-box"><code>{actionSchemaUrl}</code><button onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>URLをコピー</button><small>GPTが返す追加リンクを開くと、この端末の受信箱に入ります。勝手に保存確定はしません。</small></div></div>
+      <div className="settings-section backup-section"><div><h2>バックアップ</h2><p>タスク、予定、日記、気分ログ、GPT受信箱をJSONで保存・復元できます。機種変更やスマホ利用前の保険です。</p></div><div className="backup-box"><div className="backup-actions"><button type="button" onClick={exportBackup}><Download size={15}/>書き出す</button><label><Upload size={15}/>読み込む<input type="file" accept="application/json,.json" onChange={e=>{ importBackup(e.target.files?.[0]); e.currentTarget.value='' }}/></label></div><small>{backupMessage || 'この端末の保存データだけを扱います。クラウド同期ではありません。'}</small></div></div>
+      <div className="settings-section danger-zone"><div><h2>保存データ</h2><p>タスク、予定、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div>
+    </section>
+  </>
 }
 
 function EventModal({ event: initial, save, close }: { event: CalendarEvent; save:(event:CalendarEvent)=>void; close:()=>void }) {
