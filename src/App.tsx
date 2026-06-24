@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Archive, ArrowRight, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Download, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodGuidance, moodInfo, moodOptions, parseGptImportHash, rankedTasks, sampleTasks, toLocalDateTimeValue, useStoredState } from './lib'
+import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodGuidance, moodInfo, moodOptions, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'タスク', icon: CheckCircle2 },
@@ -122,8 +122,8 @@ function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, complet
   const todayEvents = [...events].filter(event => localDate(new Date(event.startAt)) === localDate()).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
   const upcomingEvents = [...events].filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
   const todayEventMinutes = todayEvents.reduce((sum, event) => sum + eventDurationMinutes(event), 0)
-  const scheduleLoad = todayEventMinutes >= 240 || todayEvents.length >= 3 ? 'heavy' : todayEventMinutes >= 120 || todayEvents.length >= 2 ? 'medium' : 'light'
-  const taskLimit = basePlan.today.length === 0 ? 0 : scheduleLoad === 'heavy' ? (todayMood === 'very_good' || todayMood === 'good' ? 2 : 1) : scheduleLoad === 'medium' ? Math.max(1, basePlan.today.length - 1) : basePlan.today.length
+  const scheduleLoad = scheduleLoadFor(todayEvents.length, todayEventMinutes)
+  const taskLimit = taskLimitForSchedule(basePlan.today.length, todayMood, scheduleLoad)
   const plan = { ...basePlan, today: basePlan.today.slice(0, taskLimit), extra: [...basePlan.today.slice(taskLimit), ...basePlan.extra] }
   const deferredBySchedule = Math.max(0, basePlan.today.length - plan.today.length)
   const workMinutes = plan.today.reduce((n,t) => n + Math.round(t.estimatedMinutes * (100-t.progress)/100), 0)
