@@ -4,6 +4,8 @@ import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemT
 assert.equal(defaultSettings.name, 'レディ')
 assert.equal(defaultSettings.tone, '執事')
 assert.equal(defaultSettings.strictness, '標準')
+assert.equal(defaultSettings.remindersEnabled, false)
+assert.equal(defaultSettings.reminderTime, '21:30')
 
 const tiredPlan = dayPlan(sampleTasks, 'tired')
 assert.equal(tiredPlan.today.length, 2)
