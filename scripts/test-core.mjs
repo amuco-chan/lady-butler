@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks } from '../src/lib.ts'
+import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
 
 assert.equal(defaultSettings.name, 'レディ')
 assert.equal(defaultSettings.tone, '執事')
@@ -11,6 +11,13 @@ assert.equal(tiredPlan.top?.title, '心理学レポートの構成を作る')
 
 const exhaustedPlan = dayPlan(sampleTasks, 'exhausted')
 assert.equal(exhaustedPlan.today.length, 1)
+
+assert.equal(scheduleLoadFor(0, 0), 'light')
+assert.equal(scheduleLoadFor(2, 90), 'medium')
+assert.equal(scheduleLoadFor(1, 250), 'heavy')
+assert.equal(taskLimitForSchedule(3, 'normal', 'heavy'), 1)
+assert.equal(taskLimitForSchedule(5, 'good', 'heavy'), 2)
+assert.equal(taskLimitForSchedule(3, 'normal', 'medium'), 2)
 
 assert.match(moodGuidance('tired'), /詰め込む日ではありません/)
 assert.match(moodTrend([{ id: '1', date: '2026-06-24', mood: 'tired', memo: '', createdAt: '', updatedAt: '' }]), /最近の気分/)
