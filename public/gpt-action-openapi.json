@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Lady Butler GPT Inbox",
-    "description": "Send task candidates from a Custom GPT conversation to the Lady Butler app. The API returns an import URL; the user must open it and confirm before the task is saved.",
-    "version": "1.0.0"
+    "description": "Send task and calendar event candidates from a Custom GPT conversation to the Lady Butler app. The API returns an import URL; the user must open it and confirm before anything is saved.",
+    "version": "1.1.0"
   },
   "servers": [
     {
@@ -14,8 +14,8 @@
     "/api/gpt-inbox": {
       "post": {
         "operationId": "sendTaskCandidatesToLadyButler",
-        "summary": "Send task candidates to Lady Butler",
-        "description": "Use this when the user mentions a task, assignment, deadline, appointment, errand, or something they may want to track in Lady Butler. Return the importUrl to the user and ask them to open it to review the candidates.",
+        "summary": "Send task or calendar candidates to Lady Butler",
+        "description": "Use this when the user mentions a task, assignment, deadline, appointment, errand, class, shift, meeting, or time-based schedule they may want to track in Lady Butler. If it has a deadline or effort, send it as type task. If it happens at a specific start time, send it as type event. Return the importUrl to the user and ask them to open it to review the candidates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -33,13 +33,30 @@
                     "items": {
                       "type": "object",
                       "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["task", "event"],
+                          "description": "Use task for things to do by a deadline. Use event for calendar appointments with a start time."
+                        },
                         "title": {
                           "type": "string",
-                          "description": "Short task title in Japanese."
+                          "description": "Short title in Japanese."
                         },
                         "deadline": {
                           "type": "string",
-                          "description": "Deadline in ISO format. Prefer YYYY-MM-DDTHH:mm or YYYY-MM-DD. If unknown, omit it."
+                          "description": "For task items only. Deadline in ISO format. Prefer YYYY-MM-DDTHH:mm or YYYY-MM-DD. If unknown, omit it."
+                        },
+                        "startAt": {
+                          "type": "string",
+                          "description": "For event items only. Start date/time in ISO-like local format, such as 2026-06-25T14:00. Required for good calendar results."
+                        },
+                        "endAt": {
+                          "type": "string",
+                          "description": "For event items only. End date/time in ISO-like local format. If unknown, omit it and the app will use about one hour."
+                        },
+                        "location": {
+                          "type": "string",
+                          "description": "For event items only. Place, room, station, URL, or online location."
                         },
                         "category": {
                           "type": "string",
@@ -57,14 +74,32 @@
                         },
                         "memo": {
                           "type": "string",
-                          "description": "Useful note such as class name, report condition, first step, or uncertainty."
+                          "description": "Useful note such as class name, report condition, first step, location details, or uncertainty."
                         }
+                      },
+                      "required": ["title"]
+                    }
+                  },
+                  "events": {
+                    "type": "array",
+                    "description": "Optional alternative to items for calendar events. Each event should include title and startAt when possible.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "title": { "type": "string" },
+                        "startAt": { "type": "string" },
+                        "endAt": { "type": "string" },
+                        "location": { "type": "string" },
+                        "memo": { "type": "string" }
                       },
                       "required": ["title"]
                     }
                   }
                 },
-                "required": ["items"]
+                "anyOf": [
+                  { "required": ["items"] },
+                  { "required": ["events"] }
+                ]
               }
             }
           }
