@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler GPT Inbox",
     "description": "Send task and calendar event candidates from a Custom GPT conversation to the Lady Butler app. The API returns an import URL; the user must open it and confirm before anything is saved.",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "servers": [
     {
@@ -13,9 +13,9 @@
   "paths": {
     "/api/gpt-inbox": {
       "post": {
-        "operationId": "sendTaskCandidatesToLadyButler",
+        "operationId": "sendCandidatesToLadyButler",
         "summary": "Send task or calendar candidates to Lady Butler",
-        "description": "Use this when the user mentions a task, assignment, deadline, appointment, errand, class, shift, meeting, or time-based schedule they may want to track in Lady Butler. If it has a deadline or effort, send it as type task. If it happens at a specific start time, send it as type event. Return the importUrl to the user and ask them to open it to review the candidates.",
+        "description": "Send candidates only after distinguishing them by purpose. A task is something the user completes and checks off, including assignments, submissions, errands, purchases, and messages. A task stays type task even when its deadline includes a clock time, such as 'Friday by 18:00'; put that time in deadline and never in startAt. An event is time the user attends or reserves on a calendar, including classes, shifts, appointments, meetings, and travel with a known start time; put that time in startAt. If the user says 'submit my shift preferences', that is a task, while 'work a shift from 18:00' is an event. Do not use a category named 予定. Never invent a date or time. If the distinction or required event start time is unclear, ask one short clarification before calling this action. Return the importUrl and ask the user to open it to review the candidates.",
         "requestBody": {
           "required": true,
           "content": {
@@ -30,13 +30,14 @@
                   "items": {
                     "type": "array",
                     "minItems": 1,
+                    "description": "Preferred input. Every candidate must explicitly declare type task or event.",
                     "items": {
                       "type": "object",
                       "properties": {
                         "type": {
                           "type": "string",
                           "enum": ["task", "event"],
-                          "description": "Use task for things to do by a deadline. Use event for calendar appointments with a start time."
+                          "description": "Use task for a completable/checkable action, even if its deadline has a time. Use event only for calendar time with a known start."
                         },
                         "title": {
                           "type": "string",
@@ -44,11 +45,11 @@
                         },
                         "deadline": {
                           "type": "string",
-                          "description": "For task items only. Deadline in ISO format. Prefer YYYY-MM-DDTHH:mm or YYYY-MM-DD. If unknown, omit it."
+                          "description": "Task only. Deadline in ISO format. A phrase such as '18:00までに' belongs here, not in startAt. If unknown, omit it and mention the uncertainty in memo."
                         },
                         "startAt": {
                           "type": "string",
-                          "description": "For event items only. Start date/time in ISO-like local format, such as 2026-06-25T14:00. Required for good calendar results."
+                          "description": "Event only. Known start date/time in ISO-like local format, such as 2026-06-25T14:00. Never use a task deadline here."
                         },
                         "endAt": {
                           "type": "string",
@@ -56,11 +57,12 @@
                         },
                         "location": {
                           "type": "string",
-                          "description": "For event items only. Place, room, station, URL, or online location."
+                          "description": "Event only. Place, room, station, URL, or online location."
                         },
                         "category": {
                           "type": "string",
-                          "enum": ["課題", "授業", "生活", "バイト", "予定", "買い物", "その他"]
+                          "enum": ["課題", "授業", "生活", "バイト", "買い物", "その他"],
+                          "description": "Task only. Do not use 予定; calendar entries must use type event instead."
                         },
                         "priority": {
                           "type": "string",
@@ -77,12 +79,12 @@
                           "description": "Useful note such as class name, report condition, first step, location details, or uncertainty."
                         }
                       },
-                      "required": ["title"]
+                      "required": ["type", "title"]
                     }
                   },
                   "events": {
                     "type": "array",
-                    "description": "Optional alternative to items for calendar events. Each event should include title and startAt when possible.",
+                    "description": "Compatibility input for calendar events only. Each event must include a known startAt. Ask the user when the start time is unknown; never invent it.",
                     "items": {
                       "type": "object",
                       "properties": {
@@ -92,7 +94,7 @@
                         "location": { "type": "string" },
                         "memo": { "type": "string" }
                       },
-                      "required": ["title"]
+                      "required": ["title", "startAt"]
                     }
                   }
                 },
