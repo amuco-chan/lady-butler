@@ -1,5 +1,20 @@
 import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import gptInboxHandler from '../api/gpt-inbox.js'
 import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
+
+async function callGptInbox(body) {
+  let responseBody = ''
+  const req = { method: 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https' } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await gptInboxHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
 
 assert.equal(defaultSettings.name, 'レディ')
 assert.equal(defaultSettings.tone, '執事')
@@ -55,5 +70,42 @@ const importedEvent = inboxItemToEvent(gptEventItems[0])
 assert.equal(importedEvent.title, '美容院')
 assert.equal(importedEvent.location, '駅前')
 assert.match(formatEventTime(importedEvent).time, /15:00/)
+
+const deadlineWithTime = normalizeGptInboxPayload({
+  sourceText: '金曜18時までにレポートを提出する',
+  items: [{ type: 'task', title: 'レポートを提出する', deadline: '2026-06-26T18:00', startAt: '2026-06-26T18:00', category: '予定' }],
+})
+assert.equal(deadlineWithTime[0].type, 'task')
+assert.equal(deadlineWithTime[0].category, '課題')
+
+const inferredDeadline = normalizeGptInboxPayload({
+  items: [{ title: '奨学金の申請', deadline: '2026-07-01T17:00', startAt: '2026-07-01T17:00' }],
+})
+assert.equal(inferredDeadline[0].type, 'task')
+
+const eventWithoutTime = normalizeGptInboxPayload({
+  event: { title: '病院の予約', memo: '時刻は未確認' },
+})
+assert.equal(eventWithoutTime[0].type, 'event')
+
+const apiDeadline = await callGptInbox({
+  sourceText: '金曜18時までにレポートを提出する',
+  items: [{ type: 'task', title: 'レポートを提出する', deadline: '2026-06-26T18:00', startAt: '2026-06-26T18:00', category: '予定' }],
+})
+assert.equal(apiDeadline.status, 200)
+assert.equal(apiDeadline.body.items[0].type, 'task')
+assert.equal(apiDeadline.body.items[0].category, '課題')
+
+const apiShift = await callGptInbox({
+  sourceText: '金曜18時からバイト',
+  items: [{ type: 'event', title: 'バイト', startAt: '2026-06-26T18:00', endAt: '2026-06-26T22:00' }],
+})
+assert.equal(apiShift.body.items[0].type, 'event')
+assert.equal(apiShift.body.items[0].startAt, '2026-06-26T18:00')
+
+const actionSchema = JSON.parse(await readFile(new URL('../public/gpt-action-openapi.json', import.meta.url), 'utf8'))
+const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content['application/json'].schema.properties.items.items
+assert.deepEqual(itemSchema.required, ['type', 'title'])
+assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 
 console.log('コア機能テスト: OK')
