@@ -205,7 +205,14 @@ export function normalizeEstimatedMinutes(value: unknown) {
 
 function isEventLike(raw: Record<string, unknown>) {
   const type = textOf(raw.type || raw.kind || raw.itemType || raw.item_type).toLowerCase()
-  return ['event', 'schedule', 'calendar', '予定', 'カレンダー'].includes(type) || !!(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when)
+  if (['task', 'todo', 'やること', 'タスク'].includes(type)) return false
+  if (['event', 'schedule', 'calendar', '予定', 'カレンダー'].includes(type)) return true
+  if (raw.deadline || raw.dueDate || raw.due_date) return false
+  return !!(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when)
+}
+
+function withInboxType(item: unknown, type: 'task' | 'event') {
+  return item && typeof item === 'object' ? { ...item as Record<string, unknown>, type } : item
 }
 
 function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now: string): GptInboxTaskItem[] {
@@ -251,10 +258,10 @@ export function normalizeGptInboxPayload(payload: unknown, now = new Date().toIS
   const root = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {}
   const rawItems = [
     ...(Array.isArray(root.items) ? root.items : []),
-    ...(Array.isArray(root.tasks) ? root.tasks : []),
-    ...(Array.isArray(root.events) ? root.events : []),
+    ...(Array.isArray(root.tasks) ? root.tasks.map(item => withInboxType(item, 'task')) : []),
+    ...(Array.isArray(root.events) ? root.events.map(item => withInboxType(item, 'event')) : []),
     ...(!Array.isArray(root.items) && !Array.isArray(root.tasks) && !Array.isArray(root.events) && (root.title || root.task || root.event)
-      ? [root.task && typeof root.task === 'object' ? root.task : root.event && typeof root.event === 'object' ? root.event : root]
+      ? [root.task && typeof root.task === 'object' ? withInboxType(root.task, 'task') : root.event && typeof root.event === 'object' ? withInboxType(root.event, 'event') : root]
       : []),
   ]
   const sourceText = textOf(root.sourceText || root.source_text || root.originalText || root.original_text)
