@@ -30,7 +30,7 @@ export function useStoredState<T>(key: string, initial: T): [T, React.Dispatch<R
 }
 
 export const priorityWeight = { 高: 3, 中: 2, 低: 1 } as const
-export const categories: Category[] = ['課題', '授業', '生活', 'バイト', '予定', '買い物', 'その他']
+export const categories: Exclude<Category, '予定'>[] = ['課題', '授業', '生活', 'バイト', '買い物', 'その他']
 export const priorities: Priority[] = ['高', '中', '低']
 
 export function rankedTasks(tasks: Task[]) {
@@ -121,7 +121,7 @@ export function moodTrend(logs: MoodLog[]) {
   const recent = [...logs].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 3)
   if (!recent.length) return '気分を記録すると、予定の組み方に反映します。'
   const average = recent.reduce((sum, log) => sum + (moodInfo(log.mood)?.score ?? 3), 0) / recent.length
-  if (recent.length >= 2 && average <= 2) return `ここ${recent.length}日、気分が低めです。今日は最低限のタスクだけに絞りましょう。`
+  if (recent.length >= 2 && average <= 2) return `ここ${recent.length}日、気分が低めです。今日は最低限のやることだけに絞りましょう。`
   if (average >= 4) return '最近は調子が安定しています。余力は、前倒しに少しだけ使いましょう。'
   return '最近の気分は大きく崩れていません。いつものペースで十分です。'
 }
@@ -138,12 +138,12 @@ const textOf = (value: unknown) => typeof value === 'string' ? value.trim() : ''
 
 export function normalizeCategory(value: unknown, title = ''): Category {
   const text = textOf(value)
-  if (categories.includes(text as Category)) return text as Category
+  if (categories.includes(text as Exclude<Category, '予定'>)) return text as Category
   if (/課題|レポート|提出|宿題|発表|論文/.test(`${text} ${title}`)) return '課題'
   if (/授業|講義|ゼミ|出席/.test(`${text} ${title}`)) return '授業'
   if (/買|購入|注文/.test(`${text} ${title}`)) return '買い物'
   if (/バイト|勤務|シフト/.test(`${text} ${title}`)) return 'バイト'
-  if (/予定|予約|面談|病院/.test(`${text} ${title}`)) return '予定'
+  if (/予定|予約|面談|病院/.test(`${text} ${title}`)) return '生活'
   if (/掃除|洗濯|生活|家事/.test(`${text} ${title}`)) return '生活'
   return 'その他'
 }
@@ -221,7 +221,7 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
     category: normalizeCategory(raw.category, title),
     priority: normalizePriority(raw.priority),
     estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
-    memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたタスク候補'),
+    memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたやること候補'),
     sourceText: itemSource,
     createdAt: now,
   }]
