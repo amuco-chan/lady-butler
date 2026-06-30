@@ -47,3 +47,13 @@
 /* Short, contextual guidance inside the add/edit modals. */
 .modal-help{max-width:520px;margin:8px 0 0!important;font-size:10px!important;line-height:1.75;color:#777d78!important;letter-spacing:0!important;font-weight:400!important}
 @media(max-width:760px){.modal-help{font-size:9px!important}}
+
+/* Home command emphasis */
+.command-summary{background:linear-gradient(135deg,#172a3a 0,#213b4c 100%);border-right-color:#ffffff14}
+.command-summary:after{color:#ffffff08}
+.command-summary>span{color:#c8a873}
+.command-summary h2{color:#fffaf0}
+.command-summary p{color:#d4dce0}
+.command-pills b{color:#f4ede1;background:#ffffff0d;border-color:#ffffff20}
+.command-pills .load-medium{background:#c8a8731c;color:#ead8b9;border-color:#c8a87345}
+.command-pills .load-heavy{background:#efe7da14;color:#efe1d6;border-color:#d6c7b444}
