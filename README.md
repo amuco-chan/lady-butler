@@ -11,7 +11,7 @@
 - 短い日記、執事による振り返り、過去の日記一覧
 - 気分に応じた今日のタスク量調整
 - カレンダー画面で予定の追加・編集・削除
-- Custom GPTから届いたタスク候補・予定候補を受信箱で確認して追加
+- Custom GPTから届いたタスク候補・予定候補を直接同期し、受信箱で確認して追加
 - PC／スマートフォン対応
 - スマートフォン用の下部タブと、ホーム画面へ追加できるPWA構成
 
@@ -20,8 +20,9 @@
 - React + TypeScript + Vite
 - CSSによるレスポンシブUI
 - Lucide React（アイコン）
-- localStorage（個人用MVPのデータ保存）
-- Vercel Functions（Custom GPT用の取り込みリンク生成）
+- localStorage（確定済みデータの端末内保存）
+- Vercel Functions（Custom GPT用の直接同期・取り込みリンク生成）
+- Upstash Redis（任意。GPT受信箱の端末間同期）
 - 執事らしい短い振り返り文のローカル生成
 
 チャット機能と課題サポート機能はアプリから外しています。記録と提案は、タスク・予定・気分ログ・日記を中心に使います。Custom GPTからの連携は、まず受信箱に入り、ユーザーが確認してからタスクや予定に追加します。
@@ -40,7 +41,17 @@ Custom GPTのActionsに、次のOpenAPI URLを登録します。
 
 `https://lady-butler.vercel.app/gpt-action-openapi.json`
 
-GPTが課題・買い物などをタスク候補として、面談・授業・バイト・約束など時間の決まったものを予定候補として送ると、アプリ取り込み用のURLが返ります。そのURLを開くとホームの「GPTから届いた候補」に入り、確認してからタスクまたは予定に追加できます。現時点では外部データベースを使わないため、勝手に直接保存せず、開いた端末のブラウザ内に取り込みます。
+GPTが課題・買い物などをタスク候補として、面談・授業・バイト・約束など時間の決まったものを予定候補として送ります。直接同期を設定すると、アプリを開いた時に受信箱へ自動で届きます。候補は確認するまでタスクや予定として確定されません。同期未設定時は、従来どおり安全な取り込みURLが返ります。
+
+### GPT直接同期を有効にする
+
+1. Vercel MarketplaceからUpstash Redisをこのプロジェクトへ接続します。
+2. VercelのEnvironment Variablesへ、十分に長いランダム文字列を `SYNC_ACCESS_TOKEN` として追加します。
+3. Productionへ再デプロイします。
+4. Custom GPTのActions認証をAPI Key・Bearerにし、同じ `SYNC_ACCESS_TOKEN` を登録します。
+5. Lady Butlerの「設定 → GPT直接連携」に同じ個人同期キーを入力します。
+
+Upstashの標準トークンはVercelの環境変数だけに保存し、ブラウザやCustom GPTには登録しません。必要な環境変数名は `.env.example` にあります。
 
 ## データ設計
 
@@ -68,13 +79,13 @@ npm run dev
 
 ## スマートフォンで使う
 
-GitHub Pagesで公開すると、PCを起動していないときも次のURLから開けます。
+Vercelで公開しているため、PCを起動していないときも次のURLから開けます。
 
-`https://amuco-chan.github.io/lady-butler/`
+`https://lady-butler.vercel.app/`
 
 iPhoneはSafariの共有メニューから「ホーム画面に追加」、Androidはブラウザメニューから「アプリをインストール」を選べます。
 
-タスク・日記・気分ログは、開いた端末のブラウザ内に保存されます。PCとスマートフォン間の自動同期は、将来のデータベース連携で追加できます。
+確定したタスク・日記・気分ログは、開いた端末のブラウザ内に保存されます。GPTからの未確定候補は、直接同期を設定するとPC・スマートフォンのどちらでも受信できます。
 
 ## 主なファイル
 
@@ -82,13 +93,13 @@ iPhoneはSafariの共有メニューから「ホーム画面に追加」、Andro
 - `src/lib.ts` — 保存、優先順位、執事応答、GPT受信データ変換
 - `src/types.ts` — データ型
 - `src/styles.css` — UIデザインとスマートフォン対応
-- `api/gpt-inbox.js` — Custom GPTから受け取った候補を取り込みリンクに変換
+- `api/gpt-inbox.js` — Custom GPT候補の直接同期と、安全な取り込みリンクへのフォールバック
 - `public/gpt-action-openapi.json` — Custom GPT Actions用のOpenAPI定義
 
 ## 今後追加できる機能
 
 - 記録内容をもとにした、より柔軟な振り返りと文章支援
-- SQLite／Supabaseへの保存とログイン
+- 確定済みタスク・予定・日記のクラウド同期とログイン
 - Googleカレンダー／授業時間割との同期
 - 締切通知と定時の進捗確認
 - ファイル・授業資料の読み込み
