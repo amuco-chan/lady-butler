@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler GPT Inbox",
     "description": "Send task and calendar event candidates from a Custom GPT conversation to the Lady Butler app. When private sync is configured, candidates arrive directly in the app inbox. Otherwise, the API safely returns an import URL.",
-    "version": "1.3.0"
+    "version": "1.3.1"
   },
   "servers": [
     {
@@ -15,7 +15,7 @@
       "post": {
         "operationId": "sendCandidatesToLadyButler",
         "summary": "Send task or calendar candidates to Lady Butler",
-        "description": "Send candidates only after distinguishing them by purpose. Split separate actions into separate items. A task is something the user completes and checks off, including assignments, submissions, errands, purchases, and messages. A task stays type task even when its deadline includes a clock time, such as 'Friday by 18:00'; put that time in deadline and never in startAt. An event is time the user attends or reserves on a calendar, including classes, shifts, appointments, meetings, and travel with a known start time; put that time in startAt. If the user says 'submit my shift preferences', that is a task, while 'work a shift from 18:00' is an event. Do not use a category named 予定. Resolve relative dates from the current conversation date, but never invent an unknown date or time. Ask one short clarification when the type, task deadline date, or required event start is genuinely unclear. If delivery is synced, tell the user it arrived in the Lady Butler inbox. If delivery is link, return importUrl and ask the user to open it once.",
+        "description": "Classify each item as task or event. Tasks are checkable actions and use deadline; events reserve calendar time and require startAt. Split separate actions. Never invent dates or times. Ask one clarification when essential details are unclear. Report synced or return importUrl for link delivery.",
         "requestBody": {
           "required": true,
           "content": {
