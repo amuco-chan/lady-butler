@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
-import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Copy, Database, Download, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
+import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -38,6 +38,12 @@ type AppBackup = {
   settings?: Settings
 }
 
+type GptSyncStatus = 'off' | 'connecting' | 'connected' | 'unconfigured' | 'invalid' | 'error'
+
+const inboxSignature = (item: GptInboxItem) => item.type === 'event'
+  ? `${item.type}:${item.title}:${item.startAt}:${item.endAt}`
+  : `${item.type}:${item.title}:${item.deadline}:${item.category}`
+
 export default function App() {
   const [page, setPage] = useState<Page>('home')
   const [tasks, setTasks] = useStoredState<Task[]>('lady.tasks', sampleTasks)
@@ -46,6 +52,9 @@ export default function App() {
   const [diaries, setDiaries] = useStoredState<DiaryEntry[]>('lady.diaries', [])
   const [gptInbox, setGptInbox] = useStoredState<GptInboxItem[]>('lady.gptInbox', [])
   const [settings, setSettings] = useStoredState<Settings>('lady.settings', defaultSettings)
+  const [syncToken, setSyncToken] = useStoredState<string>('lady.syncToken', '')
+  const [syncStatus, setSyncStatus] = useState<GptSyncStatus>(syncToken ? 'connecting' : 'off')
+  const [syncMessage, setSyncMessage] = useState('')
   const [editing, setEditing] = useState<Task | null>(null)
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
   const [importNotice, setImportNotice] = useState('')
@@ -66,6 +75,52 @@ export default function App() {
     setImportNotice('')
   }
   const dismissInboxItem = (id: string) => { setGptInbox(prev => prev.filter(item => item.id !== id)); setImportNotice('') }
+
+  const syncGptInbox = useCallback(async (silent = false) => {
+    const token = syncToken.trim()
+    if (!token) {
+      setSyncStatus('off')
+      setSyncMessage('個人同期キーを設定すると、GPTから直接届くようになります。')
+      return
+    }
+    if (!silent) setSyncStatus('connecting')
+    try {
+      const response = await fetch('/api/gpt-inbox', { headers: { Authorization: `Bearer ${token}` } })
+      const payload = await response.json().catch(() => ({}))
+      if (response.status === 503) {
+        setSyncStatus('unconfigured')
+        setSyncMessage('同期ストレージの設定待ちです。今は確認リンク方式が安全に動いています。')
+        return
+      }
+      if (response.status === 401) {
+        setSyncStatus('invalid')
+        setSyncMessage('個人同期キーが一致していません。')
+        return
+      }
+      if (!response.ok) throw new Error(payload.error || 'sync failed')
+      const incoming = normalizeGptInboxPayload({ items: payload.items })
+      const received = incoming.length
+      setGptInbox(prev => {
+        const seen = new Set(prev.flatMap(item => [item.id, inboxSignature(item)]))
+        const fresh = incoming.filter(item => !seen.has(item.id) && !seen.has(inboxSignature(item)))
+        return [...fresh, ...prev]
+      })
+      const ids = incoming.map(item => item.id).filter(Boolean)
+      if (ids.length) {
+        await fetch('/api/gpt-inbox', {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        })
+      }
+      setSyncStatus('connected')
+      setSyncMessage(received ? `${received}件の候補を受信しました。` : '直接同期は接続済みです。')
+      if (received) setImportNotice(`${received}件の候補がGPTから直接届きました。内容を確認してください。`)
+    } catch {
+      setSyncStatus('error')
+      setSyncMessage('同期を確認できませんでした。リンク受信は引き続き利用できます。')
+    }
+  }, [setGptInbox, syncToken])
   const backup: AppBackup = { version: 1, tasks, events, moodLogs, diaries, gptInbox, settings }
   const restoreBackup = (data: AppBackup) => {
     if (!data || typeof data !== 'object') throw new Error('バックアップの形式が読み取れません。')
@@ -90,6 +145,14 @@ export default function App() {
     setImportNotice(`${incoming.length}件の候補をGPT受信箱に入れました。内容を確認してから追加できます。`)
     history.replaceState(null, '', `${location.pathname}${location.search}`)
   }, [setGptInbox])
+
+  useEffect(() => {
+    if (!syncToken.trim()) { setSyncStatus('off'); return }
+    setSyncStatus('connecting')
+    const firstCheck = window.setTimeout(() => syncGptInbox(true), 800)
+    const timer = window.setInterval(() => syncGptInbox(true), 60 * 1000)
+    return () => { window.clearTimeout(firstCheck); window.clearInterval(timer) }
+  }, [syncGptInbox, syncToken])
 
   useEffect(() => {
     const reminderTime = settings.reminderTime || defaultSettings.reminderTime
@@ -124,7 +187,7 @@ export default function App() {
         {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
         {page === 'calendar' && <CalendarPage events={events} edit={setEditingEvent} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>}
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
-        {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
+        {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken} syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
       </div>
     </main>
     <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && events.filter(event => localDate(new Date(event.startAt)) === localDate()).length > 0 && <em>{events.filter(event => localDate(new Date(event.startAt)) === localDate()).length}</em>}</button>)}</nav>
@@ -177,7 +240,8 @@ function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, acceptI
     <PageHeading eyebrow={date} title="お帰りなさいませ、レディ。">本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
     {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT INBOX</span><h2>GPTから届いた候補</h2></div><small>{gptInbox.length}件</small></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
       const eventTime = item.type === 'event' ? formatEventTime(item) : null
-      return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {eventTime?.label} {eventTime?.date} {eventTime?.time}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>{item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
+      const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0
+      return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {eventTime?.label} {eventTime?.date} {eventTime?.time}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>{item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
     })}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
     <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TODO</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのやることはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
     <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
@@ -286,12 +350,13 @@ function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodL
 
 function Field({ label, children, wide, required }: { label:string; children:React.ReactNode; wide?:boolean; required?:boolean }) { return <label className={wide?'field wide':'field'}><span>{label}{required&&<b>*</b>}</span>{children}</label> }
 
-function SettingsPage({ settings, setSettings, backup, restore, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; backup: AppBackup; restore:(data: AppBackup)=>boolean; clear:()=>void }) {
+function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStatus, syncMessage, syncNow, backup, restore, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; syncToken: string; setSyncToken: React.Dispatch<React.SetStateAction<string>>; syncStatus: GptSyncStatus; syncMessage: string; syncNow: () => void; backup: AppBackup; restore:(data: AppBackup)=>boolean; clear:()=>void }) {
   const [backupMessage, setBackupMessage] = useState('')
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
   const effectiveSettings = { ...defaultSettings, ...settings }
   const update=<K extends keyof Settings>(k:K,v:Settings[K])=>setSettings(p=>({...defaultSettings,...p,[k]:v}))
   const actionSchemaUrl = `${location.origin}/gpt-action-openapi.json`
+  const syncLabel = syncStatus === 'connected' ? '直接同期 接続済み' : syncStatus === 'connecting' ? '接続を確認中' : syncStatus === 'unconfigured' ? 'ストレージ設定待ち' : syncStatus === 'invalid' ? '同期キーを確認' : syncStatus === 'error' ? '一時的に未接続' : 'リンク受信モード'
   const dataForBackup: AppBackup = { ...backup, settings: effectiveSettings }
   const counts = [
     ['やること', backup.tasks?.length ?? 0],
@@ -338,7 +403,7 @@ function SettingsPage({ settings, setSettings, backup, restore, clear }: { setti
       <div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={effectiveSettings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={effectiveSettings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={effectiveSettings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div>
       <div className="settings-section notification-section"><div><h2>通知</h2><p>アプリを開いている間、指定時刻に今日の確認を通知します。本格的なスマホPush通知は同期基盤と一緒に作ります。</p></div><div className="notification-box"><div className="setting-controls reminder-controls"><Field label="通知時刻"><input type="time" value={effectiveSettings.reminderTime} onChange={e=>update('reminderTime',e.target.value || defaultSettings.reminderTime)}/></Field><label className="toggle-row"><input type="checkbox" checked={effectiveSettings.remindersEnabled} onChange={e=>update('remindersEnabled',e.target.checked)}/><span>毎日の確認通知</span></label></div><div className="backup-actions"><button type="button" onClick={requestNotifications}><Bell size={15}/>{notificationStatus === 'granted' ? '通知は許可済み' : notificationStatus === 'denied' ? 'ブラウザで通知が拒否中' : '通知を許可'}</button></div><small>{notificationStatus === 'unsupported' ? 'このブラウザでは通知に対応していません。' : 'アプリを開いている間だけ動きます。閉じていても届く通知は次の段階です。'}</small></div></div>
       <div className="settings-section data-section"><div><h2>データ診断</h2><p>同期へ進む前に、今この端末にどれくらい記録があるか確認できます。</p></div><div className="data-health"><div>{counts.map(([label, value]) => <article key={label}><Database size={15}/><span>{label}</span><strong>{value}</strong></article>)}</div><small>保存サイズ 約{dataSize}KB ・ 最新更新 {lastActivity}</small></div></div>
-      <div className="settings-section gpt-link-section"><div><h2>GPT連携</h2><p>あなたのCustom GPTのActionsにこのURLを登録すると、GPTで話したやることや予定をアプリの受信箱へ送れるようになります。</p></div><div className="gpt-link-box"><code>{actionSchemaUrl}</code><button onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>URLをコピー</button><small>GPTが返す追加リンクを開くと、この端末の受信箱に入ります。勝手に保存確定はしません。</small></div></div>
+      <div className="settings-section gpt-link-section"><div><h2>GPT直接連携</h2><p>GPTで話したやることや予定を、確認候補としてこのアプリへ直接届けます。同期未設定時は従来の確認リンクを使います。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${syncStatus}`}><Cloud size={16}/><strong>{syncLabel}</strong></div><Field label="個人同期キー"><input type="password" autoComplete="off" value={syncToken} onChange={e=>setSyncToken(e.target.value)} placeholder="VercelとGPTに設定した同じキー"/></Field><div className="sync-actions"><button type="button" onClick={syncNow} disabled={!syncToken.trim() || syncStatus === 'connecting'}><RefreshCw size={15}/>今すぐ同期</button><button type="button" onClick={() => navigator.clipboard.writeText(actionSchemaUrl)}><Copy size={15}/>スキーマURLをコピー</button></div><code>{actionSchemaUrl}</code><small>{syncMessage || '同期キーはこの端末内だけに保存され、バックアップには含めません。候補は確認するまで確定されません。'}</small></div></div>
       <div className="settings-section backup-section"><div><h2>バックアップ</h2><p>やること、予定、日記、気分ログ、GPT受信箱をJSONで保存・復元できます。機種変更やスマホ利用前の保険です。</p></div><div className="backup-box"><div className="backup-actions"><button type="button" onClick={exportBackup}><Download size={15}/>書き出す</button><label><Upload size={15}/>読み込む<input type="file" accept="application/json,.json" onChange={e=>{ importBackup(e.target.files?.[0]); e.currentTarget.value='' }}/></label></div><small>{backupMessage || 'この端末の保存データだけを扱います。クラウド同期ではありません。'}</small></div></div>
       <div className="settings-section danger-zone"><div><h2>保存データ</h2><p>やること、予定、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div>
     </section>
