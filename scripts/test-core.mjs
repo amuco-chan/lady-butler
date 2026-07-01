@@ -3,9 +3,9 @@ import { readFile } from 'node:fs/promises'
 import gptInboxHandler from '../api/gpt-inbox.js'
 import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
 
-async function callGptInbox(body) {
+async function callGptInbox(body, options = {}) {
   let responseBody = ''
-  const req = { method: 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https' } }
+  const req = { method: options.method || 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
   const res = {
     statusCode: 0,
     headers: {},
@@ -95,6 +95,8 @@ const apiDeadline = await callGptInbox({
 assert.equal(apiDeadline.status, 200)
 assert.equal(apiDeadline.body.items[0].type, 'task')
 assert.equal(apiDeadline.body.items[0].category, '課題')
+assert.equal(apiDeadline.body.delivery, 'link')
+assert.equal(apiDeadline.body.requiresOpen, true)
 
 const apiShift = await callGptInbox({
   sourceText: '金曜18時からバイト',
@@ -103,9 +105,71 @@ const apiShift = await callGptInbox({
 assert.equal(apiShift.body.items[0].type, 'event')
 assert.equal(apiShift.body.items[0].startAt, '2026-06-26T18:00')
 
+const smartCandidate = normalizeGptInboxPayload({
+  items: [{ id: 'stable-id', type: 'task', title: '申請内容を確認', deadline: '2026-07-02', confidence: 'low', ambiguities: ['締切時刻が未確認'], createdAt: '2026-07-01T10:00:00.000Z' }],
+})[0]
+assert.equal(smartCandidate.id, 'stable-id')
+assert.equal(smartCandidate.confidence, 'low')
+assert.deepEqual(smartCandidate.ambiguities, ['締切時刻が未確認'])
+assert.equal(smartCandidate.createdAt, '2026-07-01T10:00:00.000Z')
+
+const originalFetch = globalThis.fetch
+const originalSyncToken = process.env.SYNC_ACCESS_TOKEN
+const originalRedisUrl = process.env.UPSTASH_REDIS_REST_URL
+const originalRedisToken = process.env.UPSTASH_REDIS_REST_TOKEN
+const pipelines = []
+const queuedStore = new Map()
+process.env.SYNC_ACCESS_TOKEN = 'personal-test-token'
+process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example'
+process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-test-token'
+globalThis.fetch = async (_url, options) => {
+  const commands = JSON.parse(options.body)
+  pipelines.push(commands)
+  const results = commands.map(command => {
+    if (command[0] === 'HSET') { queuedStore.set(command[2], command[3]); return { result: 1 } }
+    if (command[0] === 'HVALS') return { result: [...queuedStore.values()] }
+    if (command[0] === 'HDEL') {
+      let removed = 0
+      for (const id of command.slice(2)) if (queuedStore.delete(id)) removed += 1
+      return { result: removed }
+    }
+    return { result: 1 }
+  })
+  return { ok: true, status: 200, json: async () => results }
+}
+
+const directSync = await callGptInbox({
+  sourceText: '明日の17時までに申請する',
+  items: [{ type: 'task', title: '申請する', deadline: '2026-07-02T17:00', confidence: 'high' }],
+}, { headers: { authorization: 'Bearer personal-test-token' } })
+assert.equal(directSync.status, 200)
+assert.equal(directSync.body.delivery, 'synced')
+assert.equal(directSync.body.requiresOpen, false)
+assert.equal(directSync.body.items[0].id.length, 24)
+assert.equal(pipelines[0][0][0], 'HSET')
+assert.equal(pipelines[0].at(-1)[0], 'EXPIRE')
+
+const cloudRead = await callGptInbox(undefined, { method: 'GET', headers: { authorization: 'Bearer personal-test-token' } })
+assert.equal(cloudRead.status, 200)
+assert.equal(cloudRead.body.count, 1)
+assert.equal(cloudRead.body.items[0].title, '申請する')
+
+const cloudDelete = await callGptInbox({ ids: [directSync.body.items[0].id] }, { method: 'DELETE', headers: { authorization: 'Bearer personal-test-token' } })
+assert.equal(cloudDelete.body.removed, 1)
+
+const unauthorizedSync = await callGptInbox({ items: [{ type: 'task', title: '確認する' }] })
+assert.equal(unauthorizedSync.status, 401)
+
+globalThis.fetch = originalFetch
+if (originalSyncToken === undefined) delete process.env.SYNC_ACCESS_TOKEN; else process.env.SYNC_ACCESS_TOKEN = originalSyncToken
+if (originalRedisUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL; else process.env.UPSTASH_REDIS_REST_URL = originalRedisUrl
+if (originalRedisToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN; else process.env.UPSTASH_REDIS_REST_TOKEN = originalRedisToken
+
 const actionSchema = JSON.parse(await readFile(new URL('../public/gpt-action-openapi.json', import.meta.url), 'utf8'))
 const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content['application/json'].schema.properties.items.items
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
+assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
+assert.equal(actionSchema.info.version, '1.3.0')
 
 console.log('コア機能テスト: OK')
