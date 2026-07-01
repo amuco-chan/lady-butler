@@ -135,6 +135,8 @@ export function makeDiaryComment(entry: Pick<DiaryEntry, 'mood' | 'doneToday' | 
 }
 
 const textOf = (value: unknown) => typeof value === 'string' ? value.trim() : ''
+const confidenceOf = (value: unknown) => ['high', 'medium', 'low'].includes(textOf(value)) ? textOf(value) as 'high' | 'medium' | 'low' : undefined
+const textListOf = (value: unknown) => Array.isArray(value) ? value.map(textOf).filter(Boolean).slice(0, 5) : []
 
 export function normalizeCategory(value: unknown, title = ''): Category {
   const text = textOf(value)
@@ -221,7 +223,7 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
   const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
   return [{
-    id: crypto.randomUUID(),
+    id: textOf(raw.id) || crypto.randomUUID(),
     type: 'task',
     title,
     deadline: normalizeDeadline(raw.deadline || raw.dueDate || raw.due_date),
@@ -230,7 +232,9 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
     estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたやること候補'),
     sourceText: itemSource,
-    createdAt: now,
+    createdAt: textOf(raw.createdAt || raw.created_at) || now,
+    confidence: confidenceOf(raw.confidence),
+    ambiguities: textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
   }]
 }
 
@@ -242,7 +246,7 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
   const endAt = normalizeEventEnd(startAt, raw.endAt || raw.end_at || raw.end || raw.until)
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
   return [{
-    id: crypto.randomUUID(),
+    id: textOf(raw.id) || crypto.randomUUID(),
     type: 'event',
     title,
     startAt,
@@ -250,7 +254,9 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
     location: textOf(raw.location || raw.place || raw.where),
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いた予定候補'),
     sourceText: itemSource,
-    createdAt: now,
+    createdAt: textOf(raw.createdAt || raw.created_at) || now,
+    confidence: confidenceOf(raw.confidence),
+    ambiguities: textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
   }]
 }
 
