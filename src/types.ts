@@ -73,6 +73,8 @@ export interface GptInboxTaskItem {
   memo: string
   sourceText: string
   createdAt: string
+  confidence?: 'high' | 'medium' | 'low'
+  ambiguities?: string[]
 }
 
 export interface GptInboxEventItem {
@@ -85,6 +87,8 @@ export interface GptInboxEventItem {
   memo: string
   sourceText: string
   createdAt: string
+  confidence?: 'high' | 'medium' | 'low'
+  ambiguities?: string[]
 }
 
 export type GptInboxItem = GptInboxTaskItem | GptInboxEventItem
