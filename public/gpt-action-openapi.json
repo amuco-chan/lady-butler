@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Lady Butler GPT Inbox",
-    "description": "Send task and calendar event candidates from a Custom GPT conversation to the Lady Butler app. The API returns an import URL; the user must open it and confirm before anything is saved.",
-    "version": "1.2.0"
+    "description": "Send task and calendar event candidates from a Custom GPT conversation to the Lady Butler app. When private sync is configured, candidates arrive directly in the app inbox. Otherwise, the API safely returns an import URL.",
+    "version": "1.3.0"
   },
   "servers": [
     {
@@ -15,7 +15,7 @@
       "post": {
         "operationId": "sendCandidatesToLadyButler",
         "summary": "Send task or calendar candidates to Lady Butler",
-        "description": "Send candidates only after distinguishing them by purpose. A task is something the user completes and checks off, including assignments, submissions, errands, purchases, and messages. A task stays type task even when its deadline includes a clock time, such as 'Friday by 18:00'; put that time in deadline and never in startAt. An event is time the user attends or reserves on a calendar, including classes, shifts, appointments, meetings, and travel with a known start time; put that time in startAt. If the user says 'submit my shift preferences', that is a task, while 'work a shift from 18:00' is an event. Do not use a category named 予定. Never invent a date or time. If the distinction or required event start time is unclear, ask one short clarification before calling this action. Return the importUrl and ask the user to open it to review the candidates.",
+        "description": "Send candidates only after distinguishing them by purpose. Split separate actions into separate items. A task is something the user completes and checks off, including assignments, submissions, errands, purchases, and messages. A task stays type task even when its deadline includes a clock time, such as 'Friday by 18:00'; put that time in deadline and never in startAt. An event is time the user attends or reserves on a calendar, including classes, shifts, appointments, meetings, and travel with a known start time; put that time in startAt. If the user says 'submit my shift preferences', that is a task, while 'work a shift from 18:00' is an event. Do not use a category named 予定. Resolve relative dates from the current conversation date, but never invent an unknown date or time. Ask one short clarification when the type, task deadline date, or required event start is genuinely unclear. If delivery is synced, tell the user it arrived in the Lady Butler inbox. If delivery is link, return importUrl and ask the user to open it once.",
         "requestBody": {
           "required": true,
           "content": {
@@ -77,6 +77,17 @@
                         "memo": {
                           "type": "string",
                           "description": "Useful note such as class name, report condition, first step, location details, or uncertainty."
+                        },
+                        "confidence": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"],
+                          "description": "Use high when type and essential date/time are explicit, medium when only optional details are missing, and low only when preserving a user-stated ambiguity. Prefer asking one clarification instead of sending low confidence."
+                        },
+                        "ambiguities": {
+                          "type": "array",
+                          "maxItems": 5,
+                          "items": { "type": "string" },
+                          "description": "Short Japanese notes about unresolved details that the app should show as 要確認. Omit when there is no ambiguity."
                         }
                       },
                       "required": ["type", "title"]
@@ -118,8 +129,10 @@
                     "count": { "type": "integer" },
                     "importUrl": {
                       "type": "string",
-                      "description": "Open this URL to import the candidates into Lady Butler."
+                      "description": "Present only for link delivery. Open this URL once to import candidates into Lady Butler."
                     },
+                    "delivery": { "type": "string", "enum": ["synced", "link"] },
+                    "requiresOpen": { "type": "boolean" },
                     "message": { "type": "string" }
                   }
                 }
