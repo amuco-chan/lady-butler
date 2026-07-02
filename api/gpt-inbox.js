@@ -219,7 +219,7 @@ export default async function handler(req, res) {
         count: queued.length,
         delivery: 'synced',
         requiresOpen: false,
-        message: 'Lady ButlerのGPT受信箱へ直接送りました。アプリで内容を確認できます。',
+        message: `${queued.length}件をLady Butlerへ送りました。アプリへ戻ると自動で受け取れます。`,
         items: queued,
       })
     }
@@ -236,7 +236,7 @@ export default async function handler(req, res) {
       delivery: 'link',
       requiresOpen: true,
       importUrl,
-      message: 'このURLを開くと、Lady ButlerのGPT受信箱に候補として入ります。ユーザーが確認するまで、やることや予定には確定されません。',
+      message: 'このリンクを一度開くとLady Butlerへ届きます。追加前に内容を確認できます。',
       items,
     })
   } catch (error) {
