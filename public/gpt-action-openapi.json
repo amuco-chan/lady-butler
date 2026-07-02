@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Lady Butler GPT Inbox",
-    "description": "Send task and calendar event candidates from a Custom GPT conversation to the Lady Butler app. When private sync is configured, candidates arrive directly in the app inbox. Otherwise, the API safely returns an import URL.",
-    "version": "1.3.1"
+    "description": "Capture real tasks and calendar plans naturally mentioned in conversation and send them to Lady Butler. The user does not need to say a special command such as add or register.",
+    "version": "1.4.0"
   },
   "servers": [
     {
@@ -14,8 +14,8 @@
     "/api/gpt-inbox": {
       "post": {
         "operationId": "sendCandidatesToLadyButler",
-        "summary": "Send task or calendar candidates to Lady Butler",
-        "description": "Classify each item as task or event. Tasks are checkable actions and use deadline; events reserve calendar time and require startAt. Split separate actions. Never invent dates or times. Ask one clarification when essential details are unclear. Report synced or return importUrl for link delivery.",
+        "summary": "Naturally capture tasks and calendar plans in Lady Butler",
+        "description": "Call this action when the user casually states a real future task, deadline, appointment, class, shift, reservation, or plan, even if they do not explicitly ask to add it. Do not call for hypotheticals, completed actions, quoted examples, or plans the user rejects. Split separate actions into separate items. A task is something checkable and may have a deadline; an event reserves calendar time and requires a known startAt. Never turn a task deadline into an event start. When an event's start is missing, ask one short clarification before calling. When only a task deadline or optional detail is missing, send the task with medium confidence and a short Japanese ambiguity note instead of interrupting the conversation. After success, tell the user briefly how many candidates were sent; do not repeat every field unless asked.",
         "requestBody": {
           "required": true,
           "content": {
@@ -25,12 +25,12 @@
                 "properties": {
                   "sourceText": {
                     "type": "string",
-                    "description": "Short quote or paraphrase of what the user said."
+                    "description": "Short Japanese paraphrase of the user's relevant words. Exclude unrelated or sensitive conversation details."
                   },
                   "items": {
                     "type": "array",
                     "minItems": 1,
-                    "description": "Preferred input. Every candidate must explicitly declare type task or event.",
+                    "description": "Every real future task or event mentioned in the same turn. Each candidate must explicitly declare type task or event.",
                     "items": {
                       "type": "object",
                       "properties": {
@@ -81,7 +81,7 @@
                         "confidence": {
                           "type": "string",
                           "enum": ["high", "medium", "low"],
-                          "description": "Use high when type and essential date/time are explicit, medium when only optional details are missing, and low only when preserving a user-stated ambiguity. Prefer asking one clarification instead of sending low confidence."
+                          "description": "Use high when type and essential date/time are explicit. Use medium for a task with a missing deadline or optional detail. Use low only to preserve another user-stated ambiguity. Ask one short clarification before sending an event whose start date or time is missing."
                         },
                         "ambiguities": {
                           "type": "array",
@@ -119,7 +119,7 @@
         },
         "responses": {
           "200": {
-            "description": "Import URL generated",
+            "description": "Candidates synced directly or an import link returned",
             "content": {
               "application/json": {
                 "schema": {
