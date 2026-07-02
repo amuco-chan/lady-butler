@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler GPT Inbox",
     "description": "Capture real tasks and calendar plans naturally mentioned in conversation and send them to Lady Butler. The user does not need to say a special command such as add or register.",
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "servers": [
     {
@@ -15,7 +15,7 @@
       "post": {
         "operationId": "sendCandidatesToLadyButler",
         "summary": "Naturally capture tasks and calendar plans in Lady Butler",
-        "description": "Call this action when the user casually states a real future task, deadline, appointment, class, shift, reservation, or plan, even if they do not explicitly ask to add it. Do not call for hypotheticals, completed actions, quoted examples, or plans the user rejects. Split separate actions into separate items. A task is something checkable and may have a deadline; an event reserves calendar time and requires a known startAt. Never turn a task deadline into an event start. When an event's start is missing, ask one short clarification before calling. When only a task deadline or optional detail is missing, send the task with medium confidence and a short Japanese ambiguity note instead of interrupting the conversation. After success, tell the user briefly how many candidates were sent; do not repeat every field unless asked.",
+        "description": "Call for a real future task or event, even without an add request. Ignore hypotheticals, completed items, examples, and rejected plans. Split items. Use event only with a known startAt. Never invent dates. Ask once if event start is missing; send tasks without deadlines as medium confidence.",
         "requestBody": {
           "required": true,
           "content": {
