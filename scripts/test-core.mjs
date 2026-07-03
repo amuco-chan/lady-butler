@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import gptInboxHandler from '../api/gpt-inbox.js'
-import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
+import { canAutoAddInboxItem, dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
 
 async function callGptInbox(body, options = {}) {
   let responseBody = ''
@@ -132,6 +132,10 @@ assert.equal(smartCandidate.id, 'stable-id')
 assert.equal(smartCandidate.confidence, 'low')
 assert.deepEqual(smartCandidate.ambiguities, ['締切時刻が未確認'])
 assert.equal(smartCandidate.createdAt, '2026-07-01T10:00:00.000Z')
+assert.equal(canAutoAddInboxItem(gptItems[0]), true)
+assert.equal(canAutoAddInboxItem(gptEventItems[0]), true)
+assert.equal(canAutoAddInboxItem(eventWithoutTime[0]), false)
+assert.equal(canAutoAddInboxItem(taskWithoutDeadline[0]), false)
 
 const originalFetch = globalThis.fetch
 const originalSyncToken = process.env.SYNC_ACCESS_TOKEN
@@ -190,7 +194,8 @@ const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
-assert.equal(actionSchema.info.version, '1.4.1')
+assert.equal(actionSchema.info.version, '1.5.0')
+assert.equal(actionSchema.paths['/api/gpt-inbox'].post['x-openai-isConsequential'], false)
 assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /real future task or event/)
 assert.ok(actionSchema.paths['/api/gpt-inbox'].post.description.length <= 300)
 
