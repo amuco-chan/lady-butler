@@ -230,12 +230,144 @@ export function moodTrend(logs: MoodLog[]) {
   return '最近の気分は大きく崩れていません。いつものペースで十分です。'
 }
 
-export function makeDiaryComment(entry: Pick<DiaryEntry, 'mood' | 'doneToday' | 'hardThings' | 'carryOver'>) {
+function seedNumber(seed: string) {
+  let value = 2166136261
+  for (const character of seed) value = Math.imul(value ^ character.charCodeAt(0), 16777619)
+  return value >>> 0
+}
+
+export function stableButlerChoice<T>(choices: readonly T[], seed: string) {
+  return choices[seedNumber(seed) % choices.length]
+}
+
+export function butlerGreeting(name: string, mood: Mood | undefined, settings: Settings, seed = localDate()) {
+  const lady = name.trim() || 'レディ'
+  const tone = settings.tone || '執事'
+  const titles = tone === '簡潔'
+    ? [`お帰りなさい、${lady}。`, `本日の整理を始めます、${lady}。`, `今日の分だけ整えましょう、${lady}。`]
+    : tone === 'やさしい'
+      ? [`お帰りなさい、${lady}。今日も来てくださって何よりです。`, `お待ちしていました、${lady}。焦らず参りましょう。`, `今日もここからで大丈夫です、${lady}。`]
+      : tone === 'イケメン'
+        ? [`お帰り、${lady}。面倒な整理は私にお任せを。`, `お待ちしていました、${lady}。今日も隣で整えましょう。`, `さあ、${lady}。今日の荷物を少し軽くしましょう。`]
+        : [`お帰りなさいませ、${lady}。`, `本日もお待ちしておりました、${lady}。`, `今日の支度は整っております、${lady}。`, `ご機嫌いかがでしょう、${lady}。`]
+  const normalSubtitles = [
+    '本日も、やるべきことを静かに片づけてまいりましょう。',
+    '急ぐものから順に、無理のない形へ整えてあります。',
+    '全部ではなく、今日に必要な分だけ進めましょう。',
+    'まず一つ決めれば、残りは私が順番を整えます。',
+  ]
+  const lowSubtitles = mood === 'exhausted'
+    ? ['今日は守りの日です。提出・連絡・休息だけで十分です。', '本日は回復を最優先に。余計な荷物はこちらで外しておきます。']
+    : ['今日は歩幅を小さく。最初の10分だけで十分です。', '詰め込まず、いちばん大切な一つだけ守りましょう。']
+  return {
+    title: stableButlerChoice(titles, `${seed}|${tone}|title`),
+    subtitle: stableButlerChoice(mood === 'tired' || mood === 'exhausted' ? lowSubtitles : normalSubtitles, `${seed}|${tone}|${mood}|subtitle`),
+  }
+}
+
+export function butlerScheduleAdvice(load: ScheduleLoad, mood: Mood | undefined, settings: Settings, seed = localDate()) {
+  if (mood === 'exhausted') return stableButlerChoice([
+    '本日は予定をこなすだけで十分です。緊急でないやることは、私が明日以降へ回しておきます。',
+    '今日は生存ラインを守る日です。提出・連絡・休息以外は増やしません。',
+  ], `${seed}|exhausted`)
+  if (mood === 'tired') return stableButlerChoice([
+    '余力が少なめです。最優先を10分だけ進め、続きは体調を見て決めましょう。',
+    '今日は量より着手です。一つ開けたら、そこで合格として構いません。',
+  ], `${seed}|tired`)
+  const choices = load === 'heavy' ? [
+    '予定が詰まっています。やることは最優先だけに絞り、前後の余白を守りましょう。',
+    '本日は時間より余白が貴重です。予定の合間へ新しい作業を足さないのが賢明です。',
+    '予定だけで十分に動く日です。追加の仕事は一つまでに留めましょう。',
+  ] : load === 'medium' ? [
+    '予定と作業の両方がある日です。移動と休憩を先に確保しておきましょう。',
+    '少しだけ密度があります。重要なものを二つ守れれば、本日は十分です。',
+    '予定の前後は軽い作業にして、集中する時間を一か所だけ作りましょう。',
+  ] : [
+    '今日は予定の圧迫が少なめです。最優先を一つ決めて、静かに進めましょう。',
+    '余白があります。重いものへ少し触れたあと、早めに切り上げても構いません。',
+    '落ち着いて動ける日です。先延ばししていた一件に、最初の手だけ付けましょう。',
+  ]
+  const base = stableButlerChoice(choices, `${seed}|${load}|${settings.tone}`)
+  if (settings.strictness === '厳しめ' && load !== 'heavy') return `${base} ただし、最優先だけは本日中に着手します。`
+  if (settings.strictness === 'やさしめ') return `${base} 余力がなければ、そこで止めて大丈夫です。`
+  return base
+}
+
+export function butlerPlanTitle(taskCount: number, minutes: number, hasNextEvent: boolean, settings: Settings, seed = localDate()) {
+  if (taskCount > 0) return stableButlerChoice([
+    `本日は${taskCount}件、約${minutes}分を目安に。`,
+    `今日守るのは${taskCount}件。目安は${minutes}分です。`,
+    `${taskCount}件に絞りました。約${minutes}分、順番に参りましょう。`,
+    `本日の仕事は${taskCount}件だけ。合計${minutes}分ほどです。`,
+  ], `${seed}|${taskCount}|${settings.tone}`)
+  return hasNextEvent
+    ? stableButlerChoice(['次の予定に合わせて、余白を残しましょう。', '次の予定までは、準備を一つだけ。', '予定に遅れないことを、本日の最優先に。'], `${seed}|event`)
+    : stableButlerChoice(['今日は余白を守りながら整えましょう。', '急ぎはありません。明日の準備を一つだけ。', '今日は静かな日です。整える時間にいたしましょう。'], `${seed}|empty`)
+}
+
+export function butlerWeekAdvice(mode: string, settings: Settings, seed = localDate()) {
+  const choices = mode === '回復を守る週' ? [
+    'ここ数日は気分が低めです。今週は増やすより、締切と休息の両方を守りましょう。',
+    '今週の成果は、無理を重ねないことです。重要な提出だけ残し、回復の余白を確保します。',
+  ] : mode === '締切処理の週' ? [
+    '近い締切が重なっています。完成度より、まず提出できる形を作るのが安全です。',
+    '今週は仕上げる週ではなく、出せる状態へ運ぶ週です。重い順に入口を作りましょう。',
+    '締切が列を作っています。一件ずつ提出ラインへ運べば、十分に間に合います。',
+  ] : mode === '予定に合わせる週' ? [
+    '予定のある日は軽く、空いている日に作業を寄せましょう。',
+    '今週は時計に逆らわず、予定の隙間へ小さな作業だけ置くのが得策です。',
+  ] : [
+    '少し前倒しできる週です。重い課題の最初の一手だけ置いておきましょう。',
+    '今週の余白は貯金にできます。未来の自分が助かる一件だけ進めましょう。',
+  ]
+  return stableButlerChoice(choices, `${seed}|${mode}|${settings.tone}`)
+}
+
+export function butlerNotification(name: string, openTasks: number, todayEvents: number, seed = localDate()) {
+  const lady = name.trim() || 'レディ'
+  return stableButlerChoice([
+    `${lady}、本日の確認です。未完了${openTasks}件、予定${todayEvents}件。大切なものから参りましょう。`,
+    `${lady}、執事より定時のご案内です。やること${openTasks}件、今日の予定${todayEvents}件です。`,
+    `${lady}、今日の荷物は未完了${openTasks}件と予定${todayEvents}件。全部を一度に持たなくて構いません。`,
+  ], `${seed}|${openTasks}|${todayEvents}`)
+}
+
+export function makeDiaryComment(entry: Pick<DiaryEntry, 'mood' | 'doneToday' | 'hardThings' | 'carryOver'> & Partial<Pick<DiaryEntry, 'date'>>, settings: Settings = defaultSettings) {
   const done = entry.doneToday.trim() || '今日をここまで過ごせたこと'
   const hard = entry.hardThings.trim() || (entry.mood === 'tired' || entry.mood === 'exhausted' ? '心身の余力が少なかったこと' : '大きな負担は未記入です')
   const carry = entry.carryOver.trim() || '明日の最優先を一つ決めること'
-  const ending = entry.mood === 'exhausted' ? '今夜は回復が仕事です。必要なら、信頼できる方に一言だけでもお伝えください。' : entry.mood === 'tired' ? '明日は10分だけ着手できれば十分です。' : '本日の前進を、明日の最初の一手につなげましょう。'
-  return `レディ、本日できたことは「${done}」です。完璧でなくとも、これは前進です。\n\nしんどかった点は「${hard}」。ここは根性で押し切るより、負担として認めるのが現実的です。\n\n明日に回すのは「${carry}」。最初から全部ではなく、もっとも小さな一手から始めましょう。\n\n${ending}`
+  const seed = `${entry.date || ''}|${done}|${entry.mood}|${settings.tone}`
+  const doneLine = stableButlerChoice([
+    `本日できたことは「${done}」です。完璧でなくとも、これは立派な前進です。`,
+    `今日の成果として「${done}」を確かに記録しました。小さく見えても、前へ進んでいます。`,
+    `「${done}」まで辿り着けましたね。本日の合格点として十分です。`,
+    `まず「${done}」を成し遂げています。今日を無駄にはしておりません。`,
+  ], `${seed}|done`)
+  const hardLine = stableButlerChoice([
+    `しんどかったのは「${hard}」。ここは根性で押し切らず、負担として扱いましょう。`,
+    `一方で「${hard}」が重荷でした。できなかった理由ではなく、明日の調整材料です。`,
+    `「${hard}」は確かに消耗するところです。今日は責めず、条件を整える方へ回しましょう。`,
+  ], `${seed}|hard`)
+  const carryLine = stableButlerChoice([
+    `明日に回すのは「${carry}」。最初から全部ではなく、最小の一手から始めましょう。`,
+    `明日は「${carry}」を最初の仕事に。入口だけ作れば、その先は後で構いません。`,
+    `持ち越しは「${carry}」ですね。明日の自分が迷わない形へ、最初の一歩だけ決めておきましょう。`,
+  ], `${seed}|carry`)
+  const endings = entry.mood === 'exhausted' ? [
+    '今夜は回復が仕事です。必要なら、信頼できる方へ一言だけでもお伝えください。',
+    '本日はここで閉じましょう。休むことも、明日を守る立派な仕事です。',
+  ] : entry.mood === 'tired' ? [
+    '明日は10分だけ着手できれば十分です。今夜は余力を取り戻しましょう。',
+    '明日の目標は完成ではなく、始めること。今日はもう荷物を下ろして構いません。',
+  ] : settings.tone === 'イケメン' ? [
+    '続きは明日の私にもお任せください。今夜は安心してお休みを。',
+    '今日の前進は、きちんと私が覚えておきます。明日も隣で整えましょう。',
+  ] : [
+    '本日の前進を、明日の最初の一手につなげましょう。',
+    '今日はここまでで十分です。続きは明日の執事にお任せください。',
+    '一日分の記録は整いました。どうぞ、今夜は肩の力を抜いてください。',
+  ]
+  return `レディ、${doneLine}\n\n${hardLine}\n\n${carryLine}\n\n${stableButlerChoice(endings, `${seed}|end`)}`
 }
 
 const textOf = (value: unknown) => typeof value === 'string' ? value.trim() : ''
