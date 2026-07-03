@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
+import { canAutoAddInboxItem, dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -100,23 +100,53 @@ export default function App() {
     setGptInbox(prev => prev.filter(candidate => candidate.id !== item.id))
     setImportNotice(duplicate ? `「${item.title}」はすでに追加済みでした。重複候補を片づけました。` : `「${item.title}」を${item.type === 'event' ? '予定' : 'やること'}に追加しました。`)
   }
-  const acceptInboxItems = (items: GptInboxItem[]) => {
-    if (!items.length) return
-    const ids = new Set(items.map(item => item.id))
-    const eventItems = items.filter((item): item is Extract<GptInboxItem, { type: 'event' }> => item.type === 'event' && !events.some(event => sameEventCandidate(event, item)))
-    const taskItems = items.filter((item): item is Extract<GptInboxItem, { type: 'task' }> => item.type === 'task' && !tasks.some(task => sameTaskCandidate(task, item)))
-    if (eventItems.length) setEvents(prev => [...prev, ...eventItems.map(inboxItemToEvent)])
-    if (taskItems.length) setTasks(prev => [...prev, ...taskItems.map(inboxItemToTask)])
-    setGptInbox(prev => prev.filter(item => !ids.has(item.id)))
-    const added = eventItems.length + taskItems.length, skipped = items.length - added
-    setImportNotice(`${added}件をまとめて追加しました。${skipped ? `${skipped}件は追加済みのため重複を防ぎました。` : ''}`)
-  }
   const reviewInboxItem = (item: GptInboxItem) => {
     setReviewingInbox(item)
     if (item.type === 'event') setEditingEvent(inboxItemToEvent(item))
     else setEditing(inboxItemToTask(item))
   }
   const dismissInboxItem = (id: string) => { setGptInbox(prev => prev.filter(item => item.id !== id)); setImportNotice('') }
+
+  const ingestGptItems = useCallback((incoming: GptInboxItem[]) => {
+    const automatic = incoming.filter(canAutoAddInboxItem)
+    const needsReview = incoming.filter(item => !canAutoAddInboxItem(item))
+    const acceptedTasks: Task[] = []
+    const acceptedEvents: CalendarEvent[] = []
+    const knownTasks = [...tasks]
+    const knownEvents = [...events]
+
+    for (const item of automatic) {
+      if (item.type === 'event') {
+        if (knownEvents.some(event => sameEventCandidate(event, item))) continue
+        const event = inboxItemToEvent(item)
+        acceptedEvents.push(event)
+        knownEvents.push(event)
+      } else {
+        if (knownTasks.some(task => sameTaskCandidate(task, item))) continue
+        const task = inboxItemToTask(item)
+        acceptedTasks.push(task)
+        knownTasks.push(task)
+      }
+    }
+
+    if (acceptedTasks.length) setTasks(prev => [...prev, ...acceptedTasks])
+    if (acceptedEvents.length) setEvents(prev => [...prev, ...acceptedEvents])
+
+    const automaticIds = new Set(automatic.map(item => item.id))
+    const automaticSignatures = new Set(automatic.map(inboxSignature))
+    setGptInbox(prev => {
+      const remaining = prev.filter(item => !automaticIds.has(item.id) && !automaticSignatures.has(inboxSignature(item)))
+      const seen = new Set(remaining.flatMap(item => [item.id, inboxSignature(item)]))
+      const fresh = needsReview.filter(item => !seen.has(item.id) && !seen.has(inboxSignature(item)))
+      return [...fresh, ...remaining]
+    })
+
+    return {
+      added: acceptedTasks.length + acceptedEvents.length,
+      needsReview: needsReview.length,
+      duplicates: automatic.length - acceptedTasks.length - acceptedEvents.length,
+    }
+  }, [events, setEvents, setGptInbox, setTasks, tasks])
 
   const syncGptInbox = useCallback(async (silent = false) => {
     const token = syncToken.trim()
@@ -142,11 +172,7 @@ export default function App() {
       if (!response.ok) throw new Error(payload.error || 'sync failed')
       const incoming = normalizeGptInboxPayload({ items: payload.items })
       const received = incoming.length
-      setGptInbox(prev => {
-        const seen = new Set(prev.flatMap(item => [item.id, inboxSignature(item)]))
-        const fresh = incoming.filter(item => !seen.has(item.id) && !seen.has(inboxSignature(item)))
-        return [...fresh, ...prev]
-      })
+      const result = ingestGptItems(incoming)
       const ids = incoming.map(item => item.id).filter(Boolean)
       if (ids.length) {
         await fetch('/api/gpt-inbox', {
@@ -156,13 +182,20 @@ export default function App() {
         })
       }
       setSyncStatus('connected')
-      setSyncMessage(received ? `${received}件の候補を受信しました。` : '直接同期は接続済みです。')
-      if (received) setImportNotice(`${received}件の候補がGPTから直接届きました。内容を確認してください。`)
+      const summary = result.needsReview
+        ? `${result.added ? `${result.added}件を自動追加し、` : ''}${result.needsReview}件だけ確認待ちです。`
+        : result.added
+          ? `${result.added}件を自動追加しました。操作は不要です。`
+          : result.duplicates
+            ? 'すでに追加済みでした。重複は作っていません。'
+            : '直接同期は接続済みです。'
+      setSyncMessage(received ? summary : '自動連携は接続済みです。')
+      if (received) setImportNotice(summary)
     } catch {
       setSyncStatus('error')
       setSyncMessage('同期を確認できませんでした。リンク受信は引き続き利用できます。')
     }
-  }, [setGptInbox, syncToken])
+  }, [ingestGptItems, syncToken])
   const backup: AppBackup = { version: 1, tasks, events, moodLogs, diaries, gptInbox, settings }
   const restoreBackup = (data: AppBackup) => {
     if (!data || typeof data !== 'object') throw new Error('バックアップの形式が読み取れません。')
@@ -179,14 +212,19 @@ export default function App() {
   useEffect(() => {
     const incoming = parseGptImportHash(window.location.hash)
     if (!incoming.length) return
-    setGptInbox(prev => {
-      const key = (item: GptInboxItem) => item.type === 'event' ? `${item.type}:${item.title}:${item.startAt}:${item.endAt}:${item.sourceText}` : `${item.type}:${item.title}:${item.deadline}:${item.sourceText}`
-      const seen = new Set(prev.map(key))
-      return [...incoming.filter(item => !seen.has(key(item))), ...prev]
-    })
-    setImportNotice(`${incoming.length}件の候補をGPT受信箱に入れました。内容を確認してから追加できます。`)
+    const result = ingestGptItems(incoming)
+    setImportNotice(result.needsReview
+      ? `${result.added ? `${result.added}件を自動追加し、` : ''}${result.needsReview}件だけ確認待ちです。`
+      : result.added ? `${result.added}件を自動追加しました。操作は不要です。` : 'すでに追加済みでした。')
     history.replaceState(null, '', `${location.pathname}${location.search}`)
-  }, [setGptInbox])
+  }, [ingestGptItems])
+
+  useEffect(() => {
+    const ready = gptInbox.filter(canAutoAddInboxItem)
+    if (!ready.length) return
+    const result = ingestGptItems(ready)
+    setImportNotice(result.added ? `${result.added}件を自動追加しました。操作は不要です。` : '追加済みの内容を整理しました。')
+  }, [gptInbox, ingestGptItems])
 
   useEffect(() => {
     if (!syncToken.trim()) { setSyncStatus('off'); return }
@@ -240,18 +278,18 @@ export default function App() {
     </aside>
     {menu && <div className="scrim" onClick={() => setMenu(false)}/>} 
     <main>
-      <header className="topbar"><button className="icon-button menu-button" type="button" aria-label="メニューを開く" title="メニューを開く" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTに話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" type="button" onClick={() => { setReviewingInbox(null); page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask()) }}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
+      <header className="topbar"><button className="icon-button menu-button" type="button" aria-label="メニューを開く" title="メニューを開く" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTで話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" type="button" onClick={() => { setReviewingInbox(null); page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask()) }}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
       <div className="page-wrap">
-        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} acceptInboxItems={acceptInboxItems} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>} 
-        {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
-        {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>} 
-        {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
+        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
+        {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>}
+        {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>}
+        {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken} syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
       </div>
     </main>
     <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && events.filter(event => localDate(new Date(event.startAt)) === localDate()).length > 0 && <em>{events.filter(event => localDate(new Date(event.startAt)) === localDate()).length}</em>}</button>)}</nav>
-    {editing && <TaskModal task={editing} save={saveTask} close={() => { setEditing(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'task' ? reviewingInbox.ambiguities : undefined}/>} 
-    {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => { setEditingEvent(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'event' ? reviewingInbox.ambiguities : undefined}/>} 
+    {editing && <TaskModal task={editing} save={saveTask} close={() => { setEditing(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'task' ? reviewingInbox.ambiguities : undefined}/>}
+    {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => { setEditingEvent(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'event' ? reviewingInbox.ambiguities : undefined}/>}
   </div>
 }
 
@@ -259,7 +297,7 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, acceptInboxItems, reviewInboxItem, dismissInboxItem }: { name: string; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; acceptInboxItems: (items: GptInboxItem[]) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
+function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const basePlan = dayPlan(tasks, todayMood)
   const todayEvents = [...events].filter(event => localDate(new Date(event.startAt)) === localDate()).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
@@ -294,16 +332,15 @@ function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, a
   const urgentWeekTasks = weekTasks.filter(task => formatDeadline(task.deadline).urgent).length
   const weekMode = lowMoodDays >= 2 ? '回復を守る週' : urgentWeekTasks >= 2 ? '締切処理の週' : weekEvents.length >= 3 ? '予定に合わせる週' : '前倒しできる週'
   const weekAdvice = lowMoodDays >= 2 ? 'ここ数日は気分が低めです。今週は増やすより、締切と休息の両方を守る設計にしましょう。' : urgentWeekTasks >= 2 ? '近い締切が重なっています。大きく進めるより、提出ラインを先に作るのが安全です。' : weekEvents.length >= 3 ? '予定がやや多めです。空いている日にやることを寄せ、予定のある日は軽くしておきましょう。' : '今週は少し前倒しできます。余力がある日に、重い課題の最初の一手だけ置いておきましょう。'
-  const readyInbox = gptInbox.filter(item => item.confidence !== 'low' && !(item.ambiguities?.length) && !(item.type === 'task' ? item.deadlineIsFallback : item.startIsFallback))
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   return <>
     <PageHeading eyebrow={date} title={`お帰りなさいませ、${name}。`}>本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
-    {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT INBOX</span><h2>GPTから届いた候補</h2></div><div className="inbox-title-actions"><small>{gptInbox.length}件</small>{readyInbox.length > 1 && <button type="button" onClick={() => acceptInboxItems(readyInbox)}><CheckCircle2 size={14}/>確認済みをまとめて追加</button>}</div></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
+    {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT AUTO SYNC</span><h2>{gptInbox.length ? '少しだけ確認してください' : '自動で反映しました'}</h2></div><div className="inbox-title-actions"><small>{gptInbox.length ? `要確認 ${gptInbox.length}件` : '操作不要'}</small></div></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
       const eventTime = item.type === 'event' ? formatEventTime(item) : null
       const taskDeadline = item.type === 'task' ? formatDeadline(item.deadline) : null
       const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0 || (item.type === 'task' ? item.deadlineIsFallback : item.startIsFallback)
       return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {item.startIsFallback ? '開始日時未設定' : `${eventTime?.label} ${eventTime?.date} ${eventTime?.time}`}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {item.deadlineIsFallback ? '締切未設定' : `${taskDeadline?.label} ${taskDeadline?.date}`} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => needsCheck ? reviewInboxItem(item) : acceptInboxItem(item)}>{needsCheck ? <Edit3 size={14}/> : <Plus size={14}/>} {needsCheck ? '確認して追加' : item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
-    })}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
+    })}</div> : <p className="inbox-empty">確認が必要なものはありません。</p>}</section>}
     <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TODO</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのやることはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
     <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
   </>
@@ -372,7 +409,7 @@ function CalendarPage({ events, edit, remove }: { events: CalendarEvent[]; edit:
     <section className="card week-calendar-card"><div className="section-title"><div><span>7 DAYS</span><h2>今週の見通し</h2></div><small>予定の密度を先に確認</small></div><div className="week-calendar-grid">{weekDays.map(day => <article key={localDate(day.date)} className={`week-day-card load-${day.load} ${localDate(day.date) === localDate() ? 'today' : ''}`}><div><span>{new Intl.DateTimeFormat('ja-JP', { weekday: 'short' }).format(day.date)}</span><strong>{day.date.getDate()}</strong></div><b>{day.load === 'heavy' ? '詰め込み禁止' : day.load === 'medium' ? '軽め' : '余白あり'}</b>{day.events.length ? <ul>{day.events.slice(0, 2).map(event => <li key={event.id}>{event.title}</li>)}{day.events.length > 2 && <li>ほか{day.events.length - 2}件</li>}</ul> : <p>予定なし</p>}</article>)}</div></section>
     <div className="calendar-layout">
       <section className="card calendar-list-card"><div className="section-title"><div><span>AGENDA</span><h2>これからの予定</h2></div><small>{upcoming.length}件</small></div>{upcoming.length ? <div className="event-list">{upcoming.map(event => <EventRow key={event.id} event={event} edit={edit} remove={remove}/>)}</div> : <Empty text="これからの予定はありません"/>}</section>
-      <section className="card calendar-side-card"><div className="section-title"><div><span>GPT FLOW</span><h2>自然文から追加</h2></div></div><div className="calendar-guide"><p>言い方を整えなくても、普段どおり話せば大丈夫です。</p><ul><li>「明日15時から美容院なんだよね」</li><li>「金曜の18時にバイト」</li><li>「レポートは日曜まで。あと洗剤も買う」</li></ul><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTで話す<ExternalLink size={12}/></button><p>話し終えてこのアプリへ戻ると自動で受信します。予定とやることはGPTが分け、曖昧な内容だけ確認を残します。</p></div></section>
+      <section className="card calendar-side-card"><div className="section-title"><div><span>GPT FLOW</span><h2>話すだけで追加</h2></div></div><div className="calendar-guide"><p>言い方を整えなくても、普段どおり話せば大丈夫です。</p><ul><li>「明日15時から美容院なんだよね」</li><li>「金曜の18時にバイト」</li><li>「レポートは日曜まで。あと洗剤も買う」</li></ul><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTで話す<ExternalLink size={12}/></button><p>内容が明確なら、そのまま自動追加します。日時などが曖昧なものだけ、アプリで一度確認します。</p></div></section>
       {past.length > 0 && <section className="card calendar-list-card calendar-past"><div className="section-title"><div><span>PAST</span><h2>過去の予定</h2></div><small>{past.length}件</small></div><div className="event-list">{past.slice(0, 8).map(event => <EventRow key={event.id} event={event} edit={edit} remove={remove}/>)}</div></section>}
     </div>
   </>
@@ -418,14 +455,14 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
   const effectiveSettings = { ...defaultSettings, ...settings }
   const update=<K extends keyof Settings>(k:K,v:Settings[K])=>setSettings(p=>({...defaultSettings,...p,[k]:v}))
   const actionSchemaUrl = `${location.origin}/gpt-action-openapi.json`
-  const syncLabel = syncStatus === 'connected' ? '直接同期 接続済み' : syncStatus === 'connecting' ? '接続を確認中' : syncStatus === 'unconfigured' ? 'ストレージ設定待ち' : syncStatus === 'invalid' ? '同期キーを確認' : syncStatus === 'error' ? '一時的に未接続' : 'リンク受信モード'
+  const syncLabel = syncStatus === 'connected' ? '自動連携 接続済み' : syncStatus === 'connecting' ? '接続を確認中' : syncStatus === 'unconfigured' ? 'ストレージ設定待ち' : syncStatus === 'invalid' ? '同期キーを確認' : syncStatus === 'error' ? '一時的に未接続' : 'リンク受信モード'
   const dataForBackup: AppBackup = { ...backup, settings: effectiveSettings }
   const counts = [
     ['やること', backup.tasks?.length ?? 0],
     ['予定', backup.events?.length ?? 0],
     ['気分ログ', backup.moodLogs?.length ?? 0],
     ['日記', backup.diaries?.length ?? 0],
-    ['GPT候補', backup.gptInbox?.length ?? 0],
+    ['GPT確認待ち', backup.gptInbox?.length ?? 0],
   ] as const
   const dataSize = Math.ceil(new Blob([JSON.stringify(dataForBackup)]).size / 1024)
   const activityTimes = [...(backup.tasks ?? []), ...(backup.events ?? []), ...(backup.moodLogs ?? []), ...(backup.diaries ?? []), ...(backup.gptInbox ?? [])]
@@ -473,7 +510,7 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
       <div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={effectiveSettings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={effectiveSettings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={effectiveSettings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div>
       <div className="settings-section notification-section"><div><h2>通知</h2><p>アプリを開いている間、指定時刻に今日の確認を通知します。アプリを閉じていても届くスマホ通知は未対応です。</p></div><div className="notification-box"><div className="setting-controls reminder-controls"><Field label="通知時刻"><input type="time" value={effectiveSettings.reminderTime} onChange={e=>update('reminderTime',e.target.value || defaultSettings.reminderTime)}/></Field><label className="toggle-row"><input type="checkbox" checked={effectiveSettings.remindersEnabled} onChange={e=>update('remindersEnabled',e.target.checked)}/><span>毎日の確認通知</span></label></div>{notificationStatus === 'default' ? <div className="backup-actions"><button type="button" onClick={requestNotifications}><Bell size={15}/>通知を許可</button></div> : <div className={`notification-permission-state permission-${notificationStatus}`} role="status"><Bell size={15}/><span>{notificationStatus === 'granted' ? '通知は許可済み' : notificationStatus === 'denied' ? '通知はブラウザ設定で拒否中' : 'このブラウザは通知に非対応'}</span></div>}<small>{notificationStatus === 'denied' ? '通知を使う場合は、ブラウザのサイト設定からLady Butlerの通知を許可してください。' : notificationStatus === 'unsupported' ? 'このブラウザでは通知に対応していません。' : 'この通知は、Lady Butlerを開いている間だけ動きます。'}</small></div></div>
       <div className="settings-section data-section"><div><h2>データ診断</h2><p>今この端末に、どれくらい記録があるか確認できます。</p></div><div className="data-health"><div>{counts.map(([label, value]) => <article key={label}><Database size={15}/><span>{label}</span><strong>{value}</strong></article>)}</div><small>保存サイズ 約{dataSize}KB ・ 最新更新 {lastActivity}</small></div></div>
-      <div className="settings-section gpt-link-section"><div><h2>GPT直接連携</h2><p>GPTを開いて普段どおり話し、このアプリへ戻るだけで候補を受け取れます。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${syncStatus}`}><Cloud size={16}/><strong>{syncLabel}</strong></div><div className="gpt-flow-steps"><span><b>1</b>GPTで話す</span><span><b>2</b>アプリへ戻る</span><span><b>3</b>確認して追加</span></div><Field label="個人同期キー"><input type="password" autoComplete="off" value={syncToken} onChange={e=>setSyncToken(e.target.value)} placeholder="VercelとGPTに設定した同じキー"/></Field><div className="sync-actions"><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTを開いて試す<ExternalLink size={12}/></button><button type="button" onClick={syncNow} disabled={!syncToken.trim() || syncStatus === 'connecting'}><RefreshCw size={15}/>今すぐ受け取る</button><button type="button" onClick={copySchemaUrl}>{copyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {copyStatus === 'copied' ? 'コピーしました' : '設定URLをコピー'}</button></div><code>{actionSchemaUrl}</code>{copyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。上のURLを長押ししてコピーしてください。</small>}<small>{syncMessage || '同期キーはこの端末内だけに保存されます。日時などが曖昧な候補は、追加前に「要確認」と表示します。'}</small></div></div>
+      <div className="settings-section gpt-link-section"><div><h2>GPT自動連携</h2><p>GPTで普段どおり話すだけ。内容が明確なら、やること・予定へ自動で反映します。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${syncStatus}`}><Cloud size={16}/><strong>{syncLabel}</strong></div><div className="gpt-flow-steps"><span><b>1</b>GPTで話す</span><span><b>2</b>自動で反映</span></div><Field label="個人同期キー"><input type="password" autoComplete="off" value={syncToken} onChange={e=>setSyncToken(e.target.value)} placeholder="VercelとGPTに設定した同じキー"/></Field><div className="sync-actions"><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTを開く<ExternalLink size={12}/></button><button type="button" onClick={syncNow} disabled={!syncToken.trim() || syncStatus === 'connecting'}><RefreshCw size={15}/>受信を確認</button><button type="button" onClick={copySchemaUrl}>{copyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {copyStatus === 'copied' ? 'コピーしました' : '設定URLをコピー'}</button></div><code>{actionSchemaUrl}</code>{copyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。上のURLを長押ししてコピーしてください。</small>}<small>{syncMessage || '同期キーはこの端末内だけに保存されます。日時などが曖昧なものだけ「要確認」に残します。'}</small></div></div>
       <div className="settings-section backup-section"><div><h2>バックアップ</h2><p>やること、予定、日記、気分ログ、GPT受信箱をJSONで保存・復元できます。機種変更やスマホ利用前の保険です。</p></div><div className="backup-box"><div className="backup-actions"><button type="button" onClick={exportBackup}><Download size={15}/>書き出す</button><label><Upload size={15}/>読み込む<input type="file" accept="application/json,.json" onChange={e=>{ importBackup(e.target.files?.[0]); e.currentTarget.value='' }}/></label></div><small>{backupMessage || 'この端末の保存データだけを扱います。クラウド同期ではありません。'}</small></div></div>
       <div className="settings-section danger-zone"><div><h2>保存データ</h2><p>やること、予定、日記、気分ログ、設定はこのブラウザ内に保存されます。</p></div><button onClick={() => confirm('すべてのデータを削除しますか？')&&clear()}><Trash2 size={16}/>保存データを削除</button></div>
     </section>
