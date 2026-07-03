@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import appDataHandler from '../api/app-data.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
 import { canAutoAddInboxItem, dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
 
@@ -13,6 +14,19 @@ async function callGptInbox(body, options = {}) {
     end(value) { responseBody = String(value) },
   }
   await gptInboxHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callAppData(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'GET', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await appDataHandler(req, res)
   return { status: res.statusCode, body: JSON.parse(responseBody) }
 }
 
@@ -143,6 +157,7 @@ const originalRedisUrl = process.env.UPSTASH_REDIS_REST_URL
 const originalRedisToken = process.env.UPSTASH_REDIS_REST_TOKEN
 const pipelines = []
 const queuedStore = new Map()
+const keyValueStore = new Map()
 process.env.SYNC_ACCESS_TOKEN = 'personal-test-token'
 process.env.UPSTASH_REDIS_REST_URL = 'https://redis.example'
 process.env.UPSTASH_REDIS_REST_TOKEN = 'redis-test-token'
@@ -150,6 +165,8 @@ globalThis.fetch = async (_url, options) => {
   const commands = JSON.parse(options.body)
   pipelines.push(commands)
   const results = commands.map(command => {
+    if (command[0] === 'GET') return { result: keyValueStore.get(command[1]) ?? null }
+    if (command[0] === 'SET') { keyValueStore.set(command[1], command[2]); return { result: 'OK' } }
     if (command[0] === 'HSET') { queuedStore.set(command[2], command[3]); return { result: 1 } }
     if (command[0] === 'HVALS') return { result: [...queuedStore.values()] }
     if (command[0] === 'HDEL') {
@@ -183,6 +200,33 @@ assert.equal(cloudDelete.body.removed, 1)
 
 const unauthorizedSync = await callGptInbox({ items: [{ type: 'task', title: '確認する' }] })
 assert.equal(unauthorizedSync.status, 401)
+
+const cloudHeaders = { authorization: 'Bearer personal-test-token' }
+const emptyAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
+assert.equal(emptyAppData.status, 200)
+assert.equal(emptyAppData.body.exists, false)
+assert.equal(emptyAppData.body.revision, 0)
+
+const savedAppData = await callAppData({
+  baseRevision: 0,
+  data: {
+    tasks: [{ id: 'task-1', title: '同期テスト', updatedAt: '2026-07-03T00:00:00.000Z' }],
+    events: [], moodLogs: [], diaries: [], gptInbox: [], settings: { name: 'レディ' },
+  },
+}, { method: 'PUT', headers: cloudHeaders })
+assert.equal(savedAppData.status, 200)
+assert.equal(savedAppData.body.revision, 1)
+
+const loadedAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
+assert.equal(loadedAppData.body.exists, true)
+assert.equal(loadedAppData.body.data.tasks[0].title, '同期テスト')
+
+const staleAppData = await callAppData({ baseRevision: 0, data: { tasks: [] } }, { method: 'PUT', headers: cloudHeaders })
+assert.equal(staleAppData.status, 409)
+assert.equal(staleAppData.body.revision, 1)
+
+const unauthorizedAppData = await callAppData(undefined, { method: 'GET' })
+assert.equal(unauthorizedAppData.status, 401)
 
 globalThis.fetch = originalFetch
 if (originalSyncToken === undefined) delete process.env.SYNC_ACCESS_TOKEN; else process.env.SYNC_ACCESS_TOKEN = originalSyncToken
