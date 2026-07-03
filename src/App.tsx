@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
+import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -440,7 +440,7 @@ export default function App() {
       const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
       const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
       const todayEvents = expandRecurringEvents(events, dayStart, dayEnd).length
-      new Notification('Lady Butler', { body: `${settings.name.trim() || 'レディ'}、本日の確認です。未完了のやること${openTasks}件、今日の予定${todayEvents}件。無理なく整えましょう。` })
+      new Notification('Lady Butler', { body: butlerNotification(settings.name, openTasks, todayEvents, `${localDate(now)}|${settings.tone}`) })
       localStorage.setItem(key, 'sent')
     }
     tick()
@@ -459,10 +459,10 @@ export default function App() {
     <main>
       <header className="topbar"><button className="icon-button menu-button" type="button" aria-label="メニューを開く" title="メニューを開く" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTで話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" type="button" onClick={() => { setReviewingInbox(null); page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask()) }}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
       <div className="page-wrap">
-        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
+        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
         {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>}
         {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
-        {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
+        {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken} syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)} deviceSyncStatus={deviceSyncStatus} deviceSyncMessage={deviceSyncMessage} deviceSyncNow={() => pullDeviceData(false)} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
       </div>
     </main>
@@ -476,7 +476,7 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
+function HomePage({ name, settings, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; settings: Settings; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const basePlan = dayPlan(tasks, todayMood)
   const calendarStart = new Date(); calendarStart.setHours(0, 0, 0, 0)
@@ -493,8 +493,10 @@ function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, a
   const nextEvent = todayEvents.find(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000) ?? upcomingEvents[0]
   const moodLabel = todayMood ? `${moodInfo(todayMood)?.emoji ?? ''} ${moodInfo(todayMood)?.label ?? ''}` : '未記録'
   const loadLabel = scheduleLoad === 'heavy' ? '詰め込み禁止' : scheduleLoad === 'medium' ? '軽め運転' : '余白あり'
-  const loadAdvice = scheduleLoad === 'heavy' ? '今日は予定の密度が高めです。やることは最優先だけに絞り、予定の前後へ作業を詰め込まないでください。' : scheduleLoad === 'medium' ? '今日は予定も作業もある日です。やることは少し減らし、移動や休憩の余白を残しましょう。' : '今日は予定の圧迫が少なめです。最優先を一つ決めて、静かに進めましょう。'
-  const commandTitle = plan.today.length ? `今日は${plan.today.length}件、約${workMinutes}分を目安に。` : nextEvent ? `次の予定に合わせて、余白を残しましょう。` : '今日は余白を守りながら整えましょう。'
+  const messageSeed = `${localDate()}|${todayMood || 'none'}|${scheduleLoad}|${plan.today.length}`
+  const greeting = butlerGreeting(name, todayMood, settings, messageSeed)
+  const loadAdvice = butlerScheduleAdvice(scheduleLoad, todayMood, settings, messageSeed)
+  const commandTitle = butlerPlanTitle(plan.today.length, workMinutes, !!nextEvent, settings, messageSeed)
   const commandBody = nextEvent ? `次の予定は${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}です。${loadAdvice}` : loadAdvice
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
   const weekEnd = new Date(todayStart); weekEnd.setDate(weekEnd.getDate() + 7)
@@ -513,10 +515,10 @@ function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, a
   const weekMinutes = weekTasks.reduce((sum, task) => sum + Math.round(task.estimatedMinutes * (100 - task.progress) / 100), 0)
   const urgentWeekTasks = weekTasks.filter(task => formatDeadline(task.deadline).urgent).length
   const weekMode = lowMoodDays >= 2 ? '回復を守る週' : urgentWeekTasks >= 2 ? '締切処理の週' : weekEvents.length >= 3 ? '予定に合わせる週' : '前倒しできる週'
-  const weekAdvice = lowMoodDays >= 2 ? 'ここ数日は気分が低めです。今週は増やすより、締切と休息の両方を守る設計にしましょう。' : urgentWeekTasks >= 2 ? '近い締切が重なっています。大きく進めるより、提出ラインを先に作るのが安全です。' : weekEvents.length >= 3 ? '予定がやや多めです。空いている日にやることを寄せ、予定のある日は軽くしておきましょう。' : '今週は少し前倒しできます。余力がある日に、重い課題の最初の一手だけ置いておきましょう。'
+  const weekAdvice = butlerWeekAdvice(weekMode, settings, `${messageSeed}|week`)
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   return <>
-    <PageHeading eyebrow={date} title={`お帰りなさいませ、${name}。`}>本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
+    <PageHeading eyebrow={date} title={greeting.title}>{greeting.subtitle}</PageHeading>
     {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT AUTO SYNC</span><h2>{gptInbox.length ? '少しだけ確認してください' : '自動で反映しました'}</h2></div><div className="inbox-title-actions"><small>{gptInbox.length ? `要確認 ${gptInbox.length}件` : '操作不要'}</small></div></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
       const eventTime = item.type === 'event' ? formatEventTime(item) : null
       const taskDeadline = item.type === 'task' ? formatDeadline(item.deadline) : null
@@ -635,7 +637,7 @@ function EventRow({ event, edit, remove }: { event: CalendarEvent; edit: (event:
   </article>
 }
 
-function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodLog[]; diaries: DiaryEntry[]; saveMood: (mood: Mood, memo: string, date?: string) => void; saveDiary: (entry: DiaryEntry) => void }) {
+function DiaryPage({ settings, moodLogs, diaries, saveMood, saveDiary }: { settings: Settings; moodLogs: MoodLog[]; diaries: DiaryEntry[]; saveMood: (mood: Mood, memo: string, date?: string) => void; saveDiary: (entry: DiaryEntry) => void }) {
   const createDraft = (date = localDate()): DiaryEntry => {
     const existing = diaries.find(entry => entry.date === date)
     if (existing) return existing
@@ -648,7 +650,7 @@ function DiaryPage({ moodLogs, diaries, saveMood, saveDiary }: { moodLogs: MoodL
   const changeDate = (date: string) => { setDraft(createDraft(date)); setSaved(false) }
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
-    const now = new Date().toISOString(), aiComment = makeDiaryComment(draft)
+    const now = new Date().toISOString(), aiComment = makeDiaryComment(draft, settings)
     const entry = { ...draft, aiComment, updatedAt: now }
     saveDiary(entry); saveMood(entry.mood, moodLogs.find(log => log.date === entry.date)?.memo ?? '', entry.date); setDraft(entry); setSaved(true)
   }
