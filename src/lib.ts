@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CalendarEvent, Category, DiaryEntry, GptInboxEventItem, GptInboxItem, GptInboxTaskItem, Mood, MoodLog, Priority, Settings, Task } from './types'
+import type { CalendarEvent, Category, DiaryEntry, EventRecurrence, GptInboxEventItem, GptInboxItem, GptInboxTaskItem, Mood, MoodLog, Priority, Settings, Task } from './types'
 
 const todayAt = (hour: number, addDays = 0) => {
   const date = new Date()
@@ -19,7 +19,7 @@ export const sampleTasks: Task[] = [
   { id: crypto.randomUUID(), title: '日用品を買う', deadline: todayAt(20, 5), category: '買い物', priority: '低', progress: 0, estimatedMinutes: 20, status: '未着手', memo: '洗剤、ティッシュ', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ]
 
-export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', remindersEnabled: false, reminderTime: '21:30' }
+export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', remindersEnabled: false, reminderTime: '21:30', gptShareTasks: true, gptShareMood: true, gptShareDiary: true }
 
 export function useStoredState<T>(key: string, initial: T): [T, React.Dispatch<React.SetStateAction<T>>] {
   const [state, setState] = useState<T>(() => {
@@ -108,6 +108,109 @@ export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt'>)
     today: diff === 0,
     past: diff < 0,
   }
+}
+
+export const recurrenceLabel = (value?: EventRecurrence) => value === 'daily' ? '毎日' : value === 'weekly' ? '毎週' : value === 'monthly' ? '毎月' : ''
+
+export function normalizeRecurrence(value: unknown): EventRecurrence {
+  const text = textOf(value).toLowerCase()
+  if (['daily', 'every_day', '毎日'].includes(text)) return 'daily'
+  if (['weekly', 'every_week', '毎週'].includes(text)) return 'weekly'
+  if (['monthly', 'every_month', '毎月'].includes(text)) return 'monthly'
+  return 'none'
+}
+
+function advanceOccurrence(date: Date, recurrence: Exclude<EventRecurrence, 'none'>) {
+  const next = new Date(date)
+  if (recurrence === 'daily') next.setDate(next.getDate() + 1)
+  if (recurrence === 'weekly') next.setDate(next.getDate() + 7)
+  if (recurrence === 'monthly') {
+    const day = next.getDate()
+    next.setDate(1)
+    next.setMonth(next.getMonth() + 1)
+    next.setDate(Math.min(day, new Date(next.getFullYear(), next.getMonth() + 1, 0).getDate()))
+  }
+  return next
+}
+
+export function expandRecurringEvents(events: CalendarEvent[], rangeStart: Date, rangeEnd: Date) {
+  const startLimit = rangeStart.getTime(), endLimit = rangeEnd.getTime()
+  return events.flatMap(event => {
+    const start = new Date(event.startAt), end = new Date(event.endAt)
+    if (Number.isNaN(start.getTime())) return []
+    const safeEnd = Number.isNaN(end.getTime()) || end <= start ? new Date(start.getTime() + 3600000) : end
+    const recurrence = normalizeRecurrence(event.recurrence)
+    if (recurrence === 'none') return safeEnd.getTime() >= startLimit && start.getTime() <= endLimit ? [event] : []
+    const duration = safeEnd.getTime() - start.getTime()
+    const until = event.recurrenceUntil ? new Date(`${event.recurrenceUntil}T23:59:59`).getTime() : endLimit
+    const occurrences: CalendarEvent[] = []
+    let cursor = new Date(start)
+    let guard = 0
+    while (cursor.getTime() <= endLimit && cursor.getTime() <= until && guard < 500) {
+      const occurrenceEnd = new Date(cursor.getTime() + duration)
+      if (occurrenceEnd.getTime() >= startLimit) occurrences.push({
+        ...event,
+        id: `${event.id}::${cursor.toISOString()}`,
+        sourceEventId: event.id,
+        startAt: toLocalDateTimeValue(cursor),
+        endAt: toLocalDateTimeValue(occurrenceEnd),
+      })
+      cursor = advanceOccurrence(cursor, recurrence)
+      guard += 1
+    }
+    return occurrences
+  }).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+}
+
+const decodeIcsText = (value: string) => value.replace(/\\n/gi, '\n').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\')
+
+function parseIcsDate(value: string) {
+  const text = value.trim()
+  const match = text.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?)?(Z)?$/)
+  if (!match) return null
+  const [, year, month, day, hour = '00', minute = '00', second = '00', utc] = match
+  const date = utc
+    ? new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)))
+    : new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+export function parseIcsCalendar(content: string): CalendarEvent[] {
+  const unfolded = content.replace(/\r?\n[ \t]/g, '')
+  const blocks = unfolded.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/g) ?? []
+  return blocks.flatMap((block, index) => {
+    const values = new Map<string, string>()
+    for (const line of block.split(/\r?\n/)) {
+      const colon = line.indexOf(':')
+      if (colon < 0) continue
+      values.set(line.slice(0, colon).split(';')[0].toUpperCase(), line.slice(colon + 1))
+    }
+    const title = decodeIcsText(values.get('SUMMARY') || '').trim()
+    const start = parseIcsDate(values.get('DTSTART') || '')
+    if (!title || !start) return []
+    const parsedEnd = parseIcsDate(values.get('DTEND') || '')
+    const end = parsedEnd && parsedEnd > start ? parsedEnd : new Date(start.getTime() + 3600000)
+    const rule = values.get('RRULE') || ''
+    const frequency = rule.match(/(?:^|;)FREQ=([^;]+)/i)?.[1]
+    const untilValue = rule.match(/(?:^|;)UNTIL=([^;]+)/i)?.[1]
+    const until = untilValue ? parseIcsDate(untilValue) : null
+    const recurrence = normalizeRecurrence(frequency)
+    const uid = values.get('UID') || `${title}-${start.toISOString()}-${index}`
+    const now = new Date().toISOString()
+    return [{
+      id: `ics-${uid}`.slice(0, 180),
+      title,
+      startAt: toLocalDateTimeValue(start),
+      endAt: toLocalDateTimeValue(end),
+      location: decodeIcsText(values.get('LOCATION') || ''),
+      memo: decodeIcsText(values.get('DESCRIPTION') || ''),
+      recurrence,
+      recurrenceUntil: until ? localDate(until) : '',
+      source: 'ics' as const,
+      createdAt: now,
+      updatedAt: now,
+    }]
+  })
 }
 
 export function moodGuidance(mood?: Mood) {
@@ -261,6 +364,8 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
     endAt,
     location: textOf(raw.location || raw.place || raw.where),
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いた予定候補'),
+    recurrence: normalizeRecurrence(raw.recurrence || raw.repeat || raw.frequency),
+    recurrenceUntil: textOf(raw.recurrenceUntil || raw.recurrence_until || raw.repeatUntil || raw.repeat_until).slice(0, 10),
     sourceText: itemSource,
     createdAt: textOf(raw.createdAt || raw.created_at) || now,
     confidence: confidenceOf(raw.confidence) || (startIsFallback ? 'low' : undefined),
@@ -333,6 +438,9 @@ export function inboxItemToEvent(item: GptInboxEventItem): CalendarEvent {
     endAt: item.endAt,
     location: item.location,
     memo: item.memo,
+    recurrence: item.recurrence || 'none',
+    recurrenceUntil: item.recurrenceUntil || '',
+    source: 'gpt',
     createdAt: now,
     updatedAt: now,
   }
