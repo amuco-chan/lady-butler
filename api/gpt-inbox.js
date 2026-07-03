@@ -227,7 +227,7 @@ export default async function handler(req, res) {
         count: queued.length,
         delivery: 'synced',
         requiresOpen: false,
-        message: `${queued.length}件をLady Butlerへ送りました。アプリへ戻ると自動で受け取れます。`,
+        message: `${queued.length}件を送りました。内容が明確ならLady Butlerが自動追加します。`,
         items: queued,
       })
     }
@@ -244,7 +244,7 @@ export default async function handler(req, res) {
       delivery: 'link',
       requiresOpen: true,
       importUrl,
-      message: 'このリンクを一度開くとLady Butlerへ届きます。追加前に内容を確認できます。',
+      message: 'このリンクを一度開くと、内容が明確なものはLady Butlerへ自動追加されます。',
       items,
     })
   } catch (error) {
