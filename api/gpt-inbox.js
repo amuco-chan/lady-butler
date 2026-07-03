@@ -52,33 +52,41 @@ function normalizeTask(raw, sourceText) {
   const title = text(raw.title || raw.name)
   if (!title) return null
   const priority = text(raw.priority)
+  const deadline = text(raw.deadline || raw.dueDate || raw.due_date)
+  const deadlineIsFallback = !deadline
+  const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineIsFallback ? ['締切未指定'] : [])])].slice(0, 5)
   return {
     type: 'task',
     title,
-    deadline: text(raw.deadline || raw.dueDate || raw.due_date),
+    deadline,
     category: normalizeCategory(raw.category, title),
     priority: allowedPriorities.has(priority) ? priority : '中',
     estimatedMinutes: number(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes, 60),
     memo: text(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いたやること候補',
     sourceText: text(raw.sourceText || raw.source_text) || sourceText,
-    confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : 'high',
-    ambiguities: textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
+    confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : deadlineIsFallback ? 'medium' : 'high',
+    ambiguities,
+    deadlineIsFallback,
   }
 }
 
 function normalizeEvent(raw, sourceText) {
   const title = text(raw.title || raw.name || raw.summary)
   if (!title) return null
+  const startAt = text(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
+  const startIsFallback = !startAt
+  const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(startIsFallback ? ['開始日時未指定'] : [])])].slice(0, 5)
   return {
     type: 'event',
     title,
-    startAt: text(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date),
+    startAt,
     endAt: text(raw.endAt || raw.end_at || raw.end || raw.until),
     location: text(raw.location || raw.place || raw.where),
     memo: text(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いた予定候補',
     sourceText: text(raw.sourceText || raw.source_text) || sourceText,
-    confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : 'high',
-    ambiguities: textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
+    confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : startIsFallback ? 'low' : 'high',
+    ambiguities,
+    startIsFallback,
   }
 }
 
