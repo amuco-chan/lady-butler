@@ -35,9 +35,9 @@ export const priorities: Priority[] = ['高', '中', '低']
 
 export function rankedTasks(tasks: Task[]) {
   return tasks.filter(t => t.status !== '完了').sort((a, b) => {
-    const timeA = new Date(a.deadline).getTime(), timeB = new Date(b.deadline).getTime()
-    const urgencyA = Math.max(0, 7 - (timeA - Date.now()) / 86400000)
-    const urgencyB = Math.max(0, 7 - (timeB - Date.now()) / 86400000)
+    const parsedA = new Date(a.deadline).getTime(), parsedB = new Date(b.deadline).getTime()
+    const urgencyA = Number.isFinite(parsedA) ? Math.max(0, 7 - (parsedA - Date.now()) / 86400000) : 0
+    const urgencyB = Number.isFinite(parsedB) ? Math.max(0, 7 - (parsedB - Date.now()) / 86400000) : 0
     return (urgencyB + priorityWeight[b.priority] * 2 + (100 - b.progress) / 50) - (urgencyA + priorityWeight[a.priority] * 2 + (100 - a.progress) / 50)
   })
 }
@@ -76,6 +76,7 @@ export function taskLimitForSchedule(taskCount: number, mood: Mood | undefined, 
 
 export function formatDeadline(value: string, compact = false) {
   const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return { date: '未設定', label: '締切未設定', urgent: false }
   const dDate = new Date(d.getFullYear(), d.getMonth(), d.getDate())
   const now = new Date()
   const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -222,19 +223,23 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
   if (!title) return []
   const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
+  const rawDeadline = raw.deadline || raw.dueDate || raw.due_date
+  const deadlineIsFallback = Boolean(raw.deadlineIsFallback) || !textOf(rawDeadline)
+  const ambiguities = [...new Set([...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineIsFallback ? ['締切未指定'] : [])])].slice(0, 5)
   return [{
     id: textOf(raw.id) || crypto.randomUUID(),
     type: 'task',
     title,
-    deadline: normalizeDeadline(raw.deadline || raw.dueDate || raw.due_date),
+    deadline: normalizeDeadline(rawDeadline),
     category: normalizeCategory(raw.category, title),
     priority: normalizePriority(raw.priority),
     estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたやること候補'),
     sourceText: itemSource,
     createdAt: textOf(raw.createdAt || raw.created_at) || now,
-    confidence: confidenceOf(raw.confidence),
-    ambiguities: textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
+    confidence: confidenceOf(raw.confidence) || (deadlineIsFallback ? 'medium' : undefined),
+    ambiguities,
+    deadlineIsFallback,
   }]
 }
 
@@ -242,9 +247,12 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
   const title = textOf(raw.title || raw.name || raw.summary)
   if (!title) return []
   const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
-  const startAt = normalizeEventStart(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
+  const rawStart = raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date
+  const startIsFallback = Boolean(raw.startIsFallback) || !textOf(rawStart)
+  const startAt = normalizeEventStart(rawStart)
   const endAt = normalizeEventEnd(startAt, raw.endAt || raw.end_at || raw.end || raw.until)
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
+  const ambiguities = [...new Set([...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(startIsFallback ? ['開始日時未指定'] : [])])].slice(0, 5)
   return [{
     id: textOf(raw.id) || crypto.randomUUID(),
     type: 'event',
@@ -255,8 +263,9 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いた予定候補'),
     sourceText: itemSource,
     createdAt: textOf(raw.createdAt || raw.created_at) || now,
-    confidence: confidenceOf(raw.confidence),
-    ambiguities: textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
+    confidence: confidenceOf(raw.confidence) || (startIsFallback ? 'low' : undefined),
+    ambiguities,
+    startIsFallback,
   }]
 }
 
