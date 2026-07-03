@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler GPT Inbox",
     "description": "Capture real tasks and calendar plans naturally mentioned in conversation and send them to Lady Butler. The user does not need to say a special command such as add or register.",
-    "version": "1.4.1"
+    "version": "1.5.0"
   },
   "servers": [
     {
@@ -15,7 +15,8 @@
       "post": {
         "operationId": "sendCandidatesToLadyButler",
         "summary": "Naturally capture tasks and calendar plans in Lady Butler",
-        "description": "Call for a real future task or event, even without an add request. Ignore hypotheticals, completed items, examples, and rejected plans. Split items. Use event only with a known startAt. Never invent dates. Ask once if event start is missing; send tasks without deadlines as medium confidence.",
+        "description": "Call once when a real future task or event is mentioned. Do not ask the user to say add or register. Ignore hypotheticals, completed items, examples, and rejected plans. Split items. Never invent dates. Ask only when an event start is missing.",
+        "x-openai-isConsequential": false,
         "requestBody": {
           "required": true,
           "content": {
