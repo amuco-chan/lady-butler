@@ -75,6 +75,7 @@ export interface GptInboxTaskItem {
   createdAt: string
   confidence?: 'high' | 'medium' | 'low'
   ambiguities?: string[]
+  deadlineIsFallback?: boolean
 }
 
 export interface GptInboxEventItem {
@@ -89,6 +90,7 @@ export interface GptInboxEventItem {
   createdAt: string
   confidence?: 'high' | 'medium' | 'low'
   ambiguities?: string[]
+  startIsFallback?: boolean
 }
 
 export type GptInboxItem = GptInboxTaskItem | GptInboxEventItem
