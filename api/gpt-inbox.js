@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto'
 const allowedCategories = new Set(['課題', '授業', '生活', 'バイト', '買い物', 'その他'])
 const allowedPriorities = new Set(['高', '中', '低'])
 const allowedConfidence = new Set(['high', 'medium', 'low'])
+const allowedRecurrence = new Set(['none', 'daily', 'weekly', 'monthly'])
 const queueKey = 'lady-butler:gpt-inbox:v1'
 
 function send(res, status, data) {
@@ -76,6 +77,7 @@ function normalizeEvent(raw, sourceText) {
   const startAt = text(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
   const startIsFallback = !startAt
   const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(startIsFallback ? ['開始日時未指定'] : [])])].slice(0, 5)
+  const recurrence = text(raw.recurrence || raw.repeat || raw.frequency).toLowerCase()
   return {
     type: 'event',
     title,
@@ -83,6 +85,8 @@ function normalizeEvent(raw, sourceText) {
     endAt: text(raw.endAt || raw.end_at || raw.end || raw.until),
     location: text(raw.location || raw.place || raw.where),
     memo: text(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いた予定候補',
+    recurrence: allowedRecurrence.has(recurrence) ? recurrence : 'none',
+    recurrenceUntil: text(raw.recurrenceUntil || raw.recurrence_until || raw.repeatUntil || raw.repeat_until).slice(0, 10),
     sourceText: text(raw.sourceText || raw.source_text) || sourceText,
     confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : startIsFallback ? 'low' : 'high',
     ambiguities,
