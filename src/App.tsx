@@ -47,6 +47,9 @@ const inboxSignature = (item: GptInboxItem) => item.type === 'event'
   ? `${item.type}:${item.title}:${item.startAt}:${item.endAt}`
   : `${item.type}:${item.title}:${item.deadline}:${item.category}`
 
+const sameTaskCandidate = (task: Task, item: Extract<GptInboxItem, { type: 'task' }>) => task.title.trim() === item.title.trim() && task.deadline === item.deadline
+const sameEventCandidate = (event: CalendarEvent, item: Extract<GptInboxItem, { type: 'event' }>) => event.title.trim() === item.title.trim() && event.startAt === item.startAt
+
 export default function App() {
   const [page, setPage] = useState<Page>('home')
   const [tasks, setTasks] = useStoredState<Task[]>('lady.tasks', sampleTasks)
@@ -60,11 +63,28 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState('')
   const [editing, setEditing] = useState<Task | null>(null)
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
+  const [reviewingInbox, setReviewingInbox] = useState<GptInboxItem | null>(null)
   const [importNotice, setImportNotice] = useState('')
   const [menu, setMenu] = useState(false)
   const changePage = (p: Page) => { setPage(p); setMenu(false) }
-  const saveTask = (task: Task) => { setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task]); setEditing(null) }
-  const saveEvent = (event: CalendarEvent) => { setEvents(prev => prev.some(item => item.id === event.id) ? prev.map(item => item.id === event.id ? { ...event, updatedAt: new Date().toISOString() } : item) : [...prev, event]); setEditingEvent(null) }
+  const saveTask = (task: Task) => {
+    setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task])
+    if (reviewingInbox?.type === 'task') {
+      setGptInbox(prev => prev.filter(item => item.id !== reviewingInbox.id))
+      setImportNotice(`「${task.title}」を確認して、やることに追加しました。`)
+      setReviewingInbox(null)
+    }
+    setEditing(null)
+  }
+  const saveEvent = (event: CalendarEvent) => {
+    setEvents(prev => prev.some(item => item.id === event.id) ? prev.map(item => item.id === event.id ? { ...event, updatedAt: new Date().toISOString() } : item) : [...prev, event])
+    if (reviewingInbox?.type === 'event') {
+      setGptInbox(prev => prev.filter(item => item.id !== reviewingInbox.id))
+      setImportNotice(`「${event.title}」を確認して、予定に追加しました。`)
+      setReviewingInbox(null)
+    }
+    setEditingEvent(null)
+  }
   const complete = (id: string) => setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: t.status === '完了' ? 0 : 100, status: t.status === '完了' ? '未着手' : '完了', updatedAt: new Date().toISOString() } : t))
   const saveMood = (mood: Mood, memo: string, date = localDate()) => setMoodLogs(prev => {
     const existing = prev.find(log => log.date === date), now = new Date().toISOString()
@@ -72,20 +92,29 @@ export default function App() {
   })
   const saveDiary = (entry: DiaryEntry) => setDiaries(prev => prev.some(item => item.date === entry.date) ? prev.map(item => item.date === entry.date ? entry : item) : [entry, ...prev])
   const acceptInboxItem = (item: GptInboxItem) => {
-    if (item.type === 'event') setEvents(prev => [...prev, inboxItemToEvent(item)])
-    else setTasks(prev => [...prev, inboxItemToTask(item)])
+    const duplicate = item.type === 'event' ? events.some(event => sameEventCandidate(event, item)) : tasks.some(task => sameTaskCandidate(task, item))
+    if (!duplicate) {
+      if (item.type === 'event') setEvents(prev => [...prev, inboxItemToEvent(item)])
+      else setTasks(prev => [...prev, inboxItemToTask(item)])
+    }
     setGptInbox(prev => prev.filter(candidate => candidate.id !== item.id))
-    setImportNotice(`「${item.title}」を${item.type === 'event' ? '予定' : 'やること'}に追加しました。`)
+    setImportNotice(duplicate ? `「${item.title}」はすでに追加済みでした。重複候補を片づけました。` : `「${item.title}」を${item.type === 'event' ? '予定' : 'やること'}に追加しました。`)
   }
   const acceptInboxItems = (items: GptInboxItem[]) => {
     if (!items.length) return
     const ids = new Set(items.map(item => item.id))
-    const eventItems = items.filter((item): item is Extract<GptInboxItem, { type: 'event' }> => item.type === 'event')
-    const taskItems = items.filter((item): item is Extract<GptInboxItem, { type: 'task' }> => item.type === 'task')
+    const eventItems = items.filter((item): item is Extract<GptInboxItem, { type: 'event' }> => item.type === 'event' && !events.some(event => sameEventCandidate(event, item)))
+    const taskItems = items.filter((item): item is Extract<GptInboxItem, { type: 'task' }> => item.type === 'task' && !tasks.some(task => sameTaskCandidate(task, item)))
     if (eventItems.length) setEvents(prev => [...prev, ...eventItems.map(inboxItemToEvent)])
     if (taskItems.length) setTasks(prev => [...prev, ...taskItems.map(inboxItemToTask)])
     setGptInbox(prev => prev.filter(item => !ids.has(item.id)))
-    setImportNotice(`${items.length}件をまとめて追加しました。`)
+    const added = eventItems.length + taskItems.length, skipped = items.length - added
+    setImportNotice(`${added}件をまとめて追加しました。${skipped ? `${skipped}件は追加済みのため重複を防ぎました。` : ''}`)
+  }
+  const reviewInboxItem = (item: GptInboxItem) => {
+    setReviewingInbox(item)
+    if (item.type === 'event') setEditingEvent(inboxItemToEvent(item))
+    else setEditing(inboxItemToTask(item))
   }
   const dismissInboxItem = (id: string) => { setGptInbox(prev => prev.filter(item => item.id !== id)); setImportNotice('') }
 
@@ -194,13 +223,13 @@ export default function App() {
       if (current !== reminderTime || localStorage.getItem(key)) return
       const openTasks = tasks.filter(task => task.status !== '完了').length
       const todayEvents = events.filter(event => localDate(new Date(event.startAt)) === localDate(now)).length
-      new Notification('Lady Butler', { body: `レディ、本日の確認です。未完了のやること${openTasks}件、今日の予定${todayEvents}件。無理なく整えましょう。` })
+      new Notification('Lady Butler', { body: `${settings.name.trim() || 'レディ'}、本日の確認です。未完了のやること${openTasks}件、今日の予定${todayEvents}件。無理なく整えましょう。` })
       localStorage.setItem(key, 'sent')
     }
     tick()
     const timer = window.setInterval(tick, 30 * 1000)
     return () => window.clearInterval(timer)
-  }, [settings.remindersEnabled, settings.reminderTime, tasks, events])
+  }, [settings.name, settings.remindersEnabled, settings.reminderTime, tasks, events])
 
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? 'open' : ''}`}>
@@ -211,18 +240,18 @@ export default function App() {
     </aside>
     {menu && <div className="scrim" onClick={() => setMenu(false)}/>} 
     <main>
-      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTに話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" onClick={() => page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask())}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
+      <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTに話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" onClick={() => { setReviewingInbox(null); page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask()) }}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
       <div className="page-wrap">
-        {page === 'home' && <HomePage tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} acceptInboxItems={acceptInboxItems} dismissInboxItem={dismissInboxItem}/>} 
-        {page === 'tasks' && <TasksPage tasks={tasks} edit={setEditing} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
-        {page === 'calendar' && <CalendarPage events={events} edit={setEditingEvent} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>}
+        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} acceptInboxItems={acceptInboxItems} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>} 
+        {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>} 
+        {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>} 
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>} 
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken} syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
       </div>
     </main>
     <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && events.filter(event => localDate(new Date(event.startAt)) === localDate()).length > 0 && <em>{events.filter(event => localDate(new Date(event.startAt)) === localDate()).length}</em>}</button>)}</nav>
-    {editing && <TaskModal task={editing} save={saveTask} close={() => setEditing(null)}/>} 
-    {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => setEditingEvent(null)}/>}
+    {editing && <TaskModal task={editing} save={saveTask} close={() => { setEditing(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'task' ? reviewingInbox.ambiguities : undefined}/>} 
+    {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => { setEditingEvent(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'event' ? reviewingInbox.ambiguities : undefined}/>} 
   </div>
 }
 
@@ -230,7 +259,7 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, acceptInboxItems, dismissInboxItem }: { tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; acceptInboxItems: (items: GptInboxItem[]) => void; dismissInboxItem: (id: string) => void }) {
+function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, acceptInboxItems, reviewInboxItem, dismissInboxItem }: { name: string; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; acceptInboxItems: (items: GptInboxItem[]) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const basePlan = dayPlan(tasks, todayMood)
   const todayEvents = [...events].filter(event => localDate(new Date(event.startAt)) === localDate()).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
@@ -265,14 +294,15 @@ function HomePage({ tasks, events, moodLogs, gptInbox, importNotice, go, acceptI
   const urgentWeekTasks = weekTasks.filter(task => formatDeadline(task.deadline).urgent).length
   const weekMode = lowMoodDays >= 2 ? '回復を守る週' : urgentWeekTasks >= 2 ? '締切処理の週' : weekEvents.length >= 3 ? '予定に合わせる週' : '前倒しできる週'
   const weekAdvice = lowMoodDays >= 2 ? 'ここ数日は気分が低めです。今週は増やすより、締切と休息の両方を守る設計にしましょう。' : urgentWeekTasks >= 2 ? '近い締切が重なっています。大きく進めるより、提出ラインを先に作るのが安全です。' : weekEvents.length >= 3 ? '予定がやや多めです。空いている日にやることを寄せ、予定のある日は軽くしておきましょう。' : '今週は少し前倒しできます。余力がある日に、重い課題の最初の一手だけ置いておきましょう。'
-  const readyInbox = gptInbox.filter(item => item.confidence !== 'low' && !(item.ambiguities?.length))
+  const readyInbox = gptInbox.filter(item => item.confidence !== 'low' && !(item.ambiguities?.length) && !(item.type === 'task' ? item.deadlineIsFallback : item.startIsFallback))
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   return <>
-    <PageHeading eyebrow={date} title="お帰りなさいませ、レディ。">本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
+    <PageHeading eyebrow={date} title={`お帰りなさいませ、${name}。`}>本日も、やるべきことを静かに片づけてまいりましょう。</PageHeading>
     {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT INBOX</span><h2>GPTから届いた候補</h2></div><div className="inbox-title-actions"><small>{gptInbox.length}件</small>{readyInbox.length > 1 && <button type="button" onClick={() => acceptInboxItems(readyInbox)}><CheckCircle2 size={14}/>確認済みをまとめて追加</button>}</div></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
       const eventTime = item.type === 'event' ? formatEventTime(item) : null
-      const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0
-      return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {eventTime?.label} {eventTime?.date} {eventTime?.time}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {formatDeadline(item.deadline).label} {formatDeadline(item.deadline).date} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => acceptInboxItem(item)}><Plus size={14}/>{item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
+      const taskDeadline = item.type === 'task' ? formatDeadline(item.deadline) : null
+      const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0 || (item.type === 'task' ? item.deadlineIsFallback : item.startIsFallback)
+      return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {item.startIsFallback ? '開始日時未設定' : `${eventTime?.label} ${eventTime?.date} ${eventTime?.time}`}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {item.deadlineIsFallback ? '締切未設定' : `${taskDeadline?.label} ${taskDeadline?.date}`} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => needsCheck ? reviewInboxItem(item) : acceptInboxItem(item)}>{needsCheck ? <Edit3 size={14}/> : <Plus size={14}/>} {needsCheck ? '確認して追加' : item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
     })}</div> : <p className="inbox-empty">候補はすべて処理済みです。</p>}</section>}
     <section className="card command-card"><div className="section-title"><div><span>TODAY COMMAND</span><h2>今日の司令塔</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TODO</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのやることはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
     <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
@@ -441,7 +471,7 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
   </>
 }
 
-function EventModal({ event: initial, save, close }: { event: CalendarEvent; save:(event:CalendarEvent)=>void; close:()=>void }) {
+function EventModal({ event: initial, save, close, notice: _notice }: { event: CalendarEvent; save:(event:CalendarEvent)=>void; close:()=>void; notice?: string[] }) {
   const [event,setEvent]=useState(initial)
   const datePart = (value: string) => value?.slice(0, 10) || localDate()
   const timePart = (value: string) => value?.slice(11, 16) || '10:00'
@@ -468,7 +498,7 @@ function EventModal({ event: initial, save, close }: { event: CalendarEvent; sav
   return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2><p className="modal-help">授業・バイト・面談など、開始時刻と終了時刻があるものです。提出物や買い物は「やること」に入れましょう。</p></div><button type="button" onClick={close}><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid event-date-grid"><Field label="開始日"><input value={datePart(event.startAt)} onChange={e=>updateStart('date',e.target.value)} placeholder="2026-07-03" inputMode="numeric"/></Field><Field label="開始時刻"><input value={timePart(event.startAt)} onChange={e=>updateStart('time',e.target.value)} placeholder="13:00" inputMode="numeric"/></Field><Field label="終了日"><input value={datePart(event.endAt)} onChange={e=>updateEnd('date',e.target.value)} placeholder="2026-07-03" inputMode="numeric"/></Field><Field label="終了時刻"><input value={timePart(event.endAt)} onChange={e=>updateEnd('time',e.target.value)} placeholder="14:00" inputMode="numeric"/></Field><Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
 }
 
-function TaskModal({ task: initial, save, close }: { task: Task; save:(t:Task)=>void; close:()=>void }) {
+function TaskModal({ task: initial, save, close, notice: _notice }: { task: Task; save:(t:Task)=>void; close:()=>void; notice?: string[] }) {
   const [task,setTask]=useState<Task>(()=>({...initial,category:taskCategoryLabel(initial.category)})), update=(k:keyof Task,v:string|number)=>setTask(p=>({...p,[k]:v}))
   return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={e=>{e.preventDefault();if(task.title.trim())save(task)}}><div className="modal-head"><div><span>TODO DETAILS</span><h2>{initial.title?'やることを編集':'新しいやること'}</h2><p className="modal-help">提出・買い物・連絡など、完了したらチェックできるものです。時間が決まっている授業や約束は「予定」に入れましょう。</p></div><button type="button" onClick={close}><X/></button></div><div className="modal-body"><Field label="やること名" required><input autoFocus value={task.title} onChange={e=>update('title',e.target.value)} placeholder="完了させたいことは？"/></Field><div className="form-grid"><Field label="締切"><input type="datetime-local" value={task.deadline} onChange={e=>update('deadline',e.target.value)}/></Field><Field label="カテゴリ"><select value={task.category} onChange={e=>update('category',e.target.value)}>{taskCategoryOptions.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="優先度"><select value={task.priority} onChange={e=>update('priority',e.target.value)}><option>高</option><option>中</option><option>低</option></select></Field><Field label="所要時間（分）"><input type="number" min="5" step="5" value={task.estimatedMinutes} onChange={e=>update('estimatedMinutes',Number(e.target.value))}/></Field><Field label="進捗"><select value={task.progress} onChange={e=>update('progress',Number(e.target.value) as Progress)}>{[0,25,50,75,100].map(v=><option value={v} key={v}>{v}%</option>)}</select></Field><Field label="ステータス"><select value={task.status} onChange={e=>update('status',e.target.value as Status)}><option>未着手</option><option>進行中</option><option>完了</option><option>保留</option></select></Field><Field label="メモ" wide><textarea value={task.memo} onChange={e=>update('memo',e.target.value)} placeholder="資料、提出条件、最初の一手など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!task.title.trim()}><Check size={17}/>保存する</button></div></form></div>
 }
