@@ -286,6 +286,11 @@ export function normalizeGptInboxPayload(payload: unknown, now = new Date().toIS
   })
 }
 
+export function canAutoAddInboxItem(item: GptInboxItem) {
+  if (item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0) return false
+  return item.type === 'task' ? !item.deadlineIsFallback : !item.startIsFallback
+}
+
 export function parseGptImportHash(hash: string) {
   const clean = hash.startsWith('#') ? hash.slice(1) : hash
   const token = new URLSearchParams(clean).get('gpt-import')
