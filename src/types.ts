@@ -4,6 +4,7 @@ export type Status = '未着手' | '進行中' | '完了' | '保留'
 export type Progress = 0 | 25 | 50 | 75 | 100
 export type Page = 'home' | 'tasks' | 'calendar' | 'diary' | 'settings'
 export type Mood = 'very_good' | 'good' | 'normal' | 'tired' | 'exhausted'
+export type EventRecurrence = 'none' | 'daily' | 'weekly' | 'monthly'
 
 export interface Task {
   id: string
@@ -26,6 +27,10 @@ export interface CalendarEvent {
   endAt: string
   location: string
   memo: string
+  recurrence?: EventRecurrence
+  recurrenceUntil?: string
+  source?: 'manual' | 'gpt' | 'ics'
+  sourceEventId?: string
   createdAt: string
   updatedAt: string
 }
@@ -38,6 +43,9 @@ export interface Settings {
   name: string
   remindersEnabled: boolean
   reminderTime: string
+  gptShareTasks: boolean
+  gptShareMood: boolean
+  gptShareDiary: boolean
 }
 
 export interface MoodLog {
@@ -86,6 +94,8 @@ export interface GptInboxEventItem {
   endAt: string
   location: string
   memo: string
+  recurrence?: EventRecurrence
+  recurrenceUntil?: string
   sourceText: string
   createdAt: string
   confidence?: 'high' | 'medium' | 'low'
