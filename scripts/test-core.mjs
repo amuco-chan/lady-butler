@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
-import { canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
+import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskLimitForSchedule } from '../src/lib.ts'
 
 async function callGptInbox(body, options = {}) {
   let responseBody = ''
@@ -71,6 +71,10 @@ assert.equal(rankedTasks([invalidDeadlineTask, validDeadlineTask]).at(-1).id, 'i
 
 assert.match(moodGuidance('tired'), /詰め込む日ではありません/)
 assert.match(moodTrend([{ id: '1', date: '2026-06-24', mood: 'tired', memo: '', createdAt: '', updatedAt: '' }]), /最近の気分/)
+assert.equal(stableButlerChoice(['a', 'b', 'c'], 'same-seed'), stableButlerChoice(['a', 'b', 'c'], 'same-seed'))
+const greetingVariations = new Set(Array.from({ length: 16 }, (_, index) => butlerGreeting('レディ', undefined, defaultSettings, `2026-07-${String(index + 1).padStart(2, '0')}`).title))
+assert.ok(greetingVariations.size >= 2)
+assert.match(butlerScheduleAdvice('light', 'tired', defaultSettings, 'tired-day'), /10分|着手/)
 
 const diaryComment = makeDiaryComment({
   mood: 'tired',
