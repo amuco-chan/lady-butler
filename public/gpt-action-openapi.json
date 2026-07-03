@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Lady Butler GPT Inbox",
-    "description": "Capture real tasks and calendar plans naturally mentioned in conversation and send them to Lady Butler. The user does not need to say a special command such as add or register.",
-    "version": "1.5.0"
+    "title": "Lady Butler Personal Context",
+    "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
+    "version": "2.0.0"
   },
   "servers": [
     {
@@ -11,6 +11,40 @@
     }
   ],
   "paths": {
+    "/api/gpt-context": {
+      "get": {
+        "operationId": "getLadyButlerContext",
+        "summary": "Read the user's current Lady Butler context",
+        "description": "Call when the user asks about their tasks, schedule, recent mood, diary, priorities, or what to do next. Do not call for unrelated conversation. Use only shared fields, quote diary text sparingly, and never invent missing records.",
+        "x-openai-isConsequential": false,
+        "responses": {
+          "200": {
+            "description": "Current user-approved tasks, events, mood logs, diary entries, and planning guidance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "generatedAt": { "type": "string" },
+                    "today": { "type": "string" },
+                    "profile": { "type": "object", "additionalProperties": true },
+                    "sharing": { "type": "object", "additionalProperties": true },
+                    "summary": { "type": "object", "additionalProperties": true },
+                    "tasks": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "events": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "moodLogs": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "diaries": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "guidance": { "type": "string" },
+                    "usageNote": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/gpt-inbox": {
       "post": {
         "operationId": "sendCandidatesToLadyButler",
@@ -60,6 +94,15 @@
                           "type": "string",
                           "description": "Event only. Place, room, station, URL, or online location."
                         },
+                        "recurrence": {
+                          "type": "string",
+                          "enum": ["none", "daily", "weekly", "monthly"],
+                          "description": "Event only. Use only when the user explicitly says the event repeats."
+                        },
+                        "recurrenceUntil": {
+                          "type": "string",
+                          "description": "Event only. Last recurrence date in YYYY-MM-DD when explicitly known."
+                        },
                         "category": {
                           "type": "string",
                           "enum": ["課題", "授業", "生活", "バイト", "買い物", "その他"],
@@ -104,7 +147,9 @@
                         "startAt": { "type": "string" },
                         "endAt": { "type": "string" },
                         "location": { "type": "string" },
-                        "memo": { "type": "string" }
+                        "memo": { "type": "string" },
+                        "recurrence": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
+                        "recurrenceUntil": { "type": "string" }
                       },
                       "required": ["title", "startAt"]
                     }
