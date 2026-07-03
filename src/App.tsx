@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { canAutoAddInboxItem, dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
+import { canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskLimitForSchedule, toLocalDateTimeValue, useStoredState } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -18,7 +18,7 @@ const blankEvent = (): CalendarEvent => {
   start.setHours(10, 0, 0, 0)
   const end = new Date(start.getTime() + 60 * 60 * 1000)
   const now = new Date().toISOString()
-  return { id: crypto.randomUUID(), title: '', startAt: toLocalDateTimeValue(start), endAt: toLocalDateTimeValue(end), location: '', memo: '', createdAt: now, updatedAt: now }
+  return { id: crypto.randomUUID(), title: '', startAt: toLocalDateTimeValue(start), endAt: toLocalDateTimeValue(end), location: '', memo: '', recurrence: 'none', recurrenceUntil: '', source: 'manual', createdAt: now, updatedAt: now }
 }
 
 const eventDurationMinutes = (event: Pick<CalendarEvent, 'startAt' | 'endAt'>) => {
@@ -89,6 +89,11 @@ export default function App() {
   const cloudDataJson = useMemo(() => JSON.stringify(cloudData), [cloudData])
   const cloudDataRef = useRef(cloudData)
   cloudDataRef.current = cloudData
+  const todayEventCount = useMemo(() => {
+    const start = new Date(); start.setHours(0, 0, 0, 0)
+    const end = new Date(start); end.setHours(23, 59, 59, 999)
+    return expandRecurringEvents(events, start, end).length
+  }, [events])
   const changePage = (p: Page) => { setPage(p); setMenu(false) }
   const saveTask = (task: Task) => {
     setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task])
@@ -100,7 +105,8 @@ export default function App() {
     setEditing(null)
   }
   const saveEvent = (event: CalendarEvent) => {
-    setEvents(prev => prev.some(item => item.id === event.id) ? prev.map(item => item.id === event.id ? { ...event, updatedAt: new Date().toISOString() } : item) : [...prev, event])
+    const cleanEvent = { ...event, sourceEventId: undefined }
+    setEvents(prev => prev.some(item => item.id === cleanEvent.id) ? prev.map(item => item.id === cleanEvent.id ? { ...cleanEvent, updatedAt: new Date().toISOString() } : item) : [...prev, cleanEvent])
     if (reviewingInbox?.type === 'event') {
       setGptInbox(prev => prev.filter(item => item.id !== reviewingInbox.id))
       setImportNotice(`「${event.title}」を確認して、予定に追加しました。`)
@@ -108,6 +114,11 @@ export default function App() {
     }
     setEditingEvent(null)
   }
+  const importCalendarEvents = (incoming: CalendarEvent[]) => setEvents(prev => {
+    const signatures = new Set(prev.map(event => `${event.title}|${event.startAt}|${event.endAt}`))
+    const fresh = incoming.filter(event => !signatures.has(`${event.title}|${event.startAt}|${event.endAt}`))
+    return fresh.length ? [...prev, ...fresh] : prev
+  })
   const complete = (id: string) => setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: t.status === '完了' ? 0 : 100, status: t.status === '完了' ? '未着手' : '完了', updatedAt: new Date().toISOString() } : t))
   const saveMood = (mood: Mood, memo: string, date = localDate()) => setMoodLogs(prev => {
     const existing = prev.find(log => log.date === date), now = new Date().toISOString()
@@ -426,7 +437,9 @@ export default function App() {
       const key = `lady.reminder.sent.${localDate(now)}.${reminderTime}`
       if (current !== reminderTime || localStorage.getItem(key)) return
       const openTasks = tasks.filter(task => task.status !== '完了').length
-      const todayEvents = events.filter(event => localDate(new Date(event.startAt)) === localDate(now)).length
+      const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
+      const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
+      const todayEvents = expandRecurringEvents(events, dayStart, dayEnd).length
       new Notification('Lady Butler', { body: `${settings.name.trim() || 'レディ'}、本日の確認です。未完了のやること${openTasks}件、今日の予定${todayEvents}件。無理なく整えましょう。` })
       localStorage.setItem(key, 'sent')
     }
@@ -438,7 +451,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? 'open' : ''}`}>
       <div className="brand"><div className="crest">L</div><div><strong>Lady's Butler</strong><span>Personal assistant</span></div><button className="icon-button mobile-close" type="button" aria-label="メニューを閉じる" title="メニューを閉じる" onClick={() => setMenu(false)}><X size={20}/></button></div>
-      <nav>{nav.map(item => <button key={item.id} title={item.label} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && events.filter(event => localDate(new Date(event.startAt)) === localDate()).length > 0 && <em>{events.filter(event => localDate(new Date(event.startAt)) === localDate()).length}</em>}</button>)}</nav>
+      <nav>{nav.map(item => <button key={item.id} title={item.label} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
       <div className="sidebar-quote"><Sparkles size={16}/><p>完璧でなくて構いません。<br/>まず提出できる形に。</p></div>
       <div className="profile-mini"><div className="avatar">L</div><div><strong>{settings.name || 'レディ'}</strong><span>本日もお供します</span></div></div>
     </aside>
@@ -448,12 +461,12 @@ export default function App() {
       <div className="page-wrap">
         {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
         {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>}
-        {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))}/>}
+        {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
         {page === 'diary' && <DiaryPage moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken} syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)} deviceSyncStatus={deviceSyncStatus} deviceSyncMessage={deviceSyncMessage} deviceSyncNow={() => pullDeviceData(false)} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
       </div>
     </main>
-    <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && events.filter(event => localDate(new Date(event.startAt)) === localDate()).length > 0 && <em>{events.filter(event => localDate(new Date(event.startAt)) === localDate()).length}</em>}</button>)}</nav>
+    <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
     {editing && <TaskModal task={editing} save={saveTask} close={() => { setEditing(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'task' ? reviewingInbox.ambiguities : undefined}/>}
     {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => { setEditingEvent(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'event' ? reviewingInbox.ambiguities : undefined}/>}
   </div>
@@ -466,8 +479,11 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
 function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const basePlan = dayPlan(tasks, todayMood)
-  const todayEvents = [...events].filter(event => localDate(new Date(event.startAt)) === localDate()).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
-  const upcomingEvents = [...events].filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
+  const calendarStart = new Date(); calendarStart.setHours(0, 0, 0, 0)
+  const calendarEnd = new Date(calendarStart); calendarEnd.setFullYear(calendarEnd.getFullYear() + 1)
+  const calendarEvents = expandRecurringEvents(events, calendarStart, calendarEnd)
+  const todayEvents = calendarEvents.filter(event => localDate(new Date(event.startAt)) === localDate())
+  const upcomingEvents = calendarEvents.filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000)
   const todayEventMinutes = todayEvents.reduce((sum, event) => sum + eventDurationMinutes(event), 0)
   const scheduleLoad = scheduleLoadFor(todayEvents.length, todayEventMinutes)
   const taskLimit = taskLimitForSchedule(basePlan.today.length, todayMood, scheduleLoad)
@@ -486,7 +502,7 @@ function HomePage({ name, tasks, events, moodLogs, gptInbox, importNotice, go, a
     const time = new Date(task.deadline).getTime()
     return !Number.isNaN(time) && time <= weekEnd.getTime()
   }).slice(0, 5)
-  const weekEvents = [...events].filter(event => {
+  const weekEvents = calendarEvents.filter(event => {
     const start = new Date(event.startAt).getTime(), end = new Date(event.endAt).getTime()
     return !Number.isNaN(start) && !Number.isNaN(end) && end >= todayStart.getTime() && start <= weekEnd.getTime()
   }).sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt)).slice(0, 5)
@@ -552,31 +568,59 @@ function TasksPage({ tasks, edit, remove, complete }: { tasks: Task[]; edit: (t:
   </>
 }
 
-function CalendarPage({ events, edit, remove }: { events: CalendarEvent[]; edit: (event: CalendarEvent) => void; remove: (id: string) => void }) {
-  const sorted = [...events].sort((a, b) => +new Date(a.startAt) - +new Date(b.startAt))
-  const upcoming = sorted.filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000)
-  const past = sorted.filter(event => new Date(event.endAt).getTime() < Date.now() - 60 * 60 * 1000).reverse()
-  const todayCount = events.filter(event => localDate(new Date(event.startAt)) === localDate()).length
+function CalendarPage({ events, edit, remove, importEvents }: { events: CalendarEvent[]; edit: (event: CalendarEvent) => void; remove: (id: string) => void; importEvents: (events: CalendarEvent[]) => void }) {
+  const [month, setMonth] = useState(() => { const date = new Date(); date.setDate(1); date.setHours(0, 0, 0, 0); return date })
+  const [selectedDate, setSelectedDate] = useState(localDate())
+  const [importMessage, setImportMessage] = useState('')
+  const now = new Date()
+  const rangeStart = new Date(now); rangeStart.setDate(rangeStart.getDate() - 62); rangeStart.setHours(0, 0, 0, 0)
+  const rangeEnd = new Date(now); rangeEnd.setFullYear(rangeEnd.getFullYear() + 1); rangeEnd.setHours(23, 59, 59, 999)
+  const occurrences = expandRecurringEvents(events, rangeStart, rangeEnd)
+  const upcoming = occurrences.filter(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000).slice(0, 40)
+  const past = occurrences.filter(event => new Date(event.endAt).getTime() < Date.now() - 60 * 60 * 1000).reverse().slice(0, 8)
+  const todayCount = occurrences.filter(event => localDate(new Date(event.startAt)) === localDate()).length
   const nextEvent = upcoming[0]
-  const today = new Date(); today.setHours(0, 0, 0, 0)
-  const weekDays = Array.from({ length: 7 }, (_, index) => {
-    const date = new Date(today)
-    date.setDate(today.getDate() + index)
-    const dayEvents = sorted.filter(event => localDate(new Date(event.startAt)) === localDate(date))
-    const minutes = dayEvents.reduce((sum, event) => sum + eventDurationMinutes(event), 0)
-    return { date, events: dayEvents, load: scheduleLoadFor(dayEvents.length, minutes) }
+  const monthStart = new Date(month.getFullYear(), month.getMonth(), 1)
+  const gridStart = new Date(monthStart); gridStart.setDate(gridStart.getDate() - gridStart.getDay())
+  const gridEnd = new Date(gridStart); gridEnd.setDate(gridEnd.getDate() + 42); gridEnd.setMilliseconds(-1)
+  const monthOccurrences = expandRecurringEvents(events, gridStart, gridEnd)
+  const monthDays = Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart); date.setDate(gridStart.getDate() + index)
+    return { date, events: monthOccurrences.filter(event => localDate(new Date(event.startAt)) === localDate(date)) }
   })
+  const selectedEvents = monthOccurrences.filter(event => localDate(new Date(event.startAt)) === selectedDate)
+  const originalEvent = (event: CalendarEvent) => events.find(item => item.id === (event.sourceEventId || event.id)) || event
+  const moveMonth = (amount: number) => {
+    const next = new Date(month.getFullYear(), month.getMonth() + amount, 1)
+    setMonth(next); setSelectedDate(localDate(next))
+  }
+  const backToToday = () => {
+    const next = new Date(); next.setDate(1); next.setHours(0, 0, 0, 0)
+    setMonth(next); setSelectedDate(localDate())
+  }
+  const importIcs = async (file?: File | null) => {
+    if (!file) return
+    try {
+      const parsed = parseIcsCalendar(await file.text())
+      const signatures = new Set(events.map(event => `${event.title}|${event.startAt}|${event.endAt}`))
+      const fresh = parsed.filter(event => !signatures.has(`${event.title}|${event.startAt}|${event.endAt}`))
+      if (fresh.length) importEvents(fresh)
+      setImportMessage(fresh.length ? `${fresh.length}件の予定を読み込みました。` : parsed.length ? 'すべて読み込み済みでした。' : '予定を見つけられませんでした。')
+    } catch {
+      setImportMessage('読み込めませんでした。Googleカレンダーから書き出した .ics ファイルか確認してください。')
+    }
+  }
   return <>
     <PageHeading eyebrow="CALENDAR" title="予定">カレンダーには、授業・バイト・面談・約束など、開始時刻が決まっているものだけを置きます。</PageHeading>
     <section className="calendar-hero card">
       <div className="calendar-hero-main"><div className="calendar-orb"><CalendarDays/></div><div><span>SMART SCHEDULE</span><h2>{nextEvent ? `次の予定は「${nextEvent.title}」です。` : 'まだ予定は入っていません。'}</h2><p>{nextEvent ? `${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}。必要な準備だけ、先に一つ置いておきましょう。` : 'GPTで「明日14時に美容院」などと話すと、予定候補として受信箱へ届きます。'}</p></div></div>
       <div className="calendar-hero-stats"><div><strong>{todayCount}</strong><span>今日の予定</span></div><div><strong>{upcoming.length}</strong><span>今後の予定</span></div></div>
     </section>
-    <section className="card week-calendar-card"><div className="section-title"><div><span>7 DAYS</span><h2>今週の見通し</h2></div><small>予定の密度を先に確認</small></div><div className="week-calendar-grid">{weekDays.map(day => <article key={localDate(day.date)} className={`week-day-card load-${day.load} ${localDate(day.date) === localDate() ? 'today' : ''}`}><div><span>{new Intl.DateTimeFormat('ja-JP', { weekday: 'short' }).format(day.date)}</span><strong>{day.date.getDate()}</strong></div><b>{day.load === 'heavy' ? '詰め込み禁止' : day.load === 'medium' ? '軽め' : '余白あり'}</b>{day.events.length ? <ul>{day.events.slice(0, 2).map(event => <li key={event.id}>{event.title}</li>)}{day.events.length > 2 && <li>ほか{day.events.length - 2}件</li>}</ul> : <p>予定なし</p>}</article>)}</div></section>
+    <section className="card month-calendar-card"><div className="month-calendar-head"><div><span>MONTH</span><h2>{new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(month)}</h2></div><div className="month-controls"><button type="button" onClick={() => moveMonth(-1)} aria-label="前の月"><ChevronLeft size={17}/></button><button type="button" onClick={backToToday}>今日</button><button type="button" onClick={() => moveMonth(1)} aria-label="次の月"><ChevronRight size={17}/></button></div></div><div className="month-weekdays">{['日','月','火','水','木','金','土'].map(day => <span key={day}>{day}</span>)}</div><div className="month-grid">{monthDays.map(day => <button type="button" key={localDate(day.date)} className={`${day.date.getMonth() !== month.getMonth() ? 'outside' : ''} ${localDate(day.date) === localDate() ? 'today' : ''} ${localDate(day.date) === selectedDate ? 'selected' : ''}`} onClick={() => setSelectedDate(localDate(day.date))}><b>{day.date.getDate()}</b><div>{day.events.slice(0, 2).map(event => <span key={event.id}><i/>{event.title}</span>)}{day.events.length > 2 && <small>ほか{day.events.length - 2}件</small>}</div></button>)}</div><div className="selected-day-agenda"><div><span>SELECTED DAY</span><strong>{new Intl.DateTimeFormat('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${selectedDate}T00:00:00`))}</strong></div>{selectedEvents.length ? <ul>{selectedEvents.map(event => <li key={event.id}><time>{new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' }).format(new Date(event.startAt))}</time><span>{event.title}</span>{recurrenceLabel(event.recurrence) && <b><Repeat2 size={11}/>{recurrenceLabel(event.recurrence)}</b>}</li>)}</ul> : <p>予定はありません</p>}</div></section>
     <div className="calendar-layout">
-      <section className="card calendar-list-card"><div className="section-title"><div><span>AGENDA</span><h2>これからの予定</h2></div><small>{upcoming.length}件</small></div>{upcoming.length ? <div className="event-list">{upcoming.map(event => <EventRow key={event.id} event={event} edit={edit} remove={remove}/>)}</div> : <Empty text="これからの予定はありません"/>}</section>
-      <section className="card calendar-side-card"><div className="section-title"><div><span>GPT FLOW</span><h2>話すだけで追加</h2></div></div><div className="calendar-guide"><p>言い方を整えなくても、普段どおり話せば大丈夫です。</p><ul><li>「明日15時から美容院なんだよね」</li><li>「金曜の18時にバイト」</li><li>「レポートは日曜まで。あと洗剤も買う」</li></ul><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTで話す<ExternalLink size={12}/></button><p>内容が明確なら、そのまま自動追加します。日時などが曖昧なものだけ、アプリで一度確認します。</p></div></section>
-      {past.length > 0 && <section className="card calendar-list-card calendar-past"><div className="section-title"><div><span>PAST</span><h2>過去の予定</h2></div><small>{past.length}件</small></div><div className="event-list">{past.slice(0, 8).map(event => <EventRow key={event.id} event={event} edit={edit} remove={remove}/>)}</div></section>}
+      <section className="card calendar-list-card"><div className="section-title"><div><span>AGENDA</span><h2>これからの予定</h2></div><small>{upcoming.length}件</small></div>{upcoming.length ? <div className="event-list">{upcoming.map(event => <EventRow key={event.id} event={event} edit={() => edit(originalEvent(event))} remove={() => remove(event.sourceEventId || event.id)}/>)}</div> : <Empty text="これからの予定はありません"/>}</section>
+      <section className="card calendar-side-card"><div className="section-title"><div><span>ADD & IMPORT</span><h2>予定を集める</h2></div></div><div className="calendar-guide"><p>GPTには普段どおり話すだけで追加できます。</p><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTで話す<ExternalLink size={12}/></button><div className="calendar-import"><strong>Googleカレンダー</strong><p>Googleカレンダーから書き出した .ics ファイルを読み込みます。既存の予定は重複しません。</p><label><Upload size={15}/> .icsを読み込む<input type="file" accept=".ics,text/calendar" onChange={event => { importIcs(event.target.files?.[0]); event.currentTarget.value = '' }}/></label>{importMessage && <small role="status">{importMessage}</small>}</div></div></section>
+      {past.length > 0 && <section className="card calendar-list-card calendar-past"><div className="section-title"><div><span>PAST</span><h2>過去の予定</h2></div><small>{past.length}件</small></div><div className="event-list">{past.map(event => <EventRow key={event.id} event={event} edit={() => edit(originalEvent(event))} remove={() => remove(event.sourceEventId || event.id)}/>)}</div></section>}
     </div>
   </>
 }
@@ -586,7 +630,7 @@ function EventRow({ event, edit, remove }: { event: CalendarEvent; edit: (event:
   const date = new Date(event.startAt)
   return <article className={`event-row ${info.today ? 'today' : ''} ${info.past ? 'past' : ''}`}>
     <div className="event-date-tile"><b>{Number.isNaN(date.getTime()) ? '-' : date.getDate()}</b><span>{Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en', { month: 'short' }).format(date).toUpperCase()}</span></div>
-    <div className="event-main"><div><strong>{event.title}</strong><span><Clock3 size={13}/>{info.label} {info.date} {info.time}</span>{event.location && <span><MapPin size={13}/>{event.location}</span>}</div>{event.memo && <p>{event.memo}</p>}</div>
+    <div className="event-main"><div><strong>{event.title}{recurrenceLabel(event.recurrence) && <b className="recurrence-chip"><Repeat2 size={11}/>{recurrenceLabel(event.recurrence)}</b>}</strong><span><Clock3 size={13}/>{info.label} {info.date} {info.time}</span>{event.location && <span><MapPin size={13}/>{event.location}</span>}</div>{event.memo && <p>{event.memo}</p>}</div>
     <div className="row-actions"><button type="button" onClick={() => edit(event)} title="編集" aria-label={`「${event.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={() => remove(event.id)} title="削除" aria-label={`「${event.title}」を削除`}><Trash2 size={16}/></button></div>
   </article>
 }
@@ -687,7 +731,7 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
       <div className="settings-section notification-section"><div><h2>通知</h2><p>アプリを開いている間、指定時刻に今日の確認を通知します。アプリを閉じていても届くスマホ通知は未対応です。</p></div><div className="notification-box"><div className="setting-controls reminder-controls"><Field label="通知時刻"><input type="time" value={effectiveSettings.reminderTime} onChange={e=>update('reminderTime',e.target.value || defaultSettings.reminderTime)}/></Field><label className="toggle-row"><input type="checkbox" checked={effectiveSettings.remindersEnabled} onChange={e=>update('remindersEnabled',e.target.checked)}/><span>毎日の確認通知</span></label></div>{notificationStatus === 'default' ? <div className="backup-actions"><button type="button" onClick={requestNotifications}><Bell size={15}/>通知を許可</button></div> : <div className={`notification-permission-state permission-${notificationStatus}`} role="status"><Bell size={15}/><span>{notificationStatus === 'granted' ? '通知は許可済み' : notificationStatus === 'denied' ? '通知はブラウザ設定で拒否中' : 'このブラウザは通知に非対応'}</span></div>}<small>{notificationStatus === 'denied' ? '通知を使う場合は、ブラウザのサイト設定からLady Butlerの通知を許可してください。' : notificationStatus === 'unsupported' ? 'このブラウザでは通知に対応していません。' : 'この通知は、Lady Butlerを開いている間だけ動きます。'}</small></div></div>
       <div className="settings-section data-section"><div><h2>データ診断</h2><p>今この端末に、どれくらい記録があるか確認できます。</p></div><div className="data-health"><div>{counts.map(([label, value]) => <article key={label}><Database size={15}/><span>{label}</span><strong>{value}</strong></article>)}</div><small>保存サイズ 約{dataSize}KB ・ 最新更新 {lastActivity}</small></div></div>
       <div className="settings-section device-sync-section"><div><h2>PC・スマホ同期</h2><p>スマホで同じ同期キーを入力すると、やること・予定・日記・気分・設定が自動で揃います。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${deviceSyncStatus}`} role="status"><Cloud size={16}/><strong>{deviceSyncLabel}</strong></div><div className="device-flow-steps"><span><b>1</b>スマホでアプリを開く</span><span><b>2</b>同じキーを貼り付ける</span></div><Field label="共通の同期キー"><input type="password" autoComplete="off" value={syncToken} onChange={e=>setSyncToken(e.target.value)} placeholder="PCとスマホで同じキー"/></Field><div className="sync-actions"><button type="button" onClick={deviceSyncNow} disabled={!syncToken.trim() || deviceSyncStatus === 'connecting' || deviceSyncStatus === 'syncing'}><RefreshCw size={15}/>今すぐ同期</button><button type="button" onClick={copySyncToken} disabled={!syncToken.trim()}>{tokenCopyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {tokenCopyStatus === 'copied' ? 'キーをコピーしました' : '同期キーをコピー'}</button></div>{tokenCopyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。同期キー欄を長押ししてコピーしてください。</small>}<small>{deviceSyncMessage || '同期キーは端末内だけに保存され、クラウドには記録されません。'}</small></div></div>
-      <div className="settings-section gpt-link-section"><div><h2>GPT自動連携</h2><p>GPTで普段どおり話すだけ。内容が明確なら、やること・予定へ自動で反映します。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${syncStatus}`}><Cloud size={16}/><strong>{syncLabel}</strong></div><div className="gpt-flow-steps"><span><b>1</b>GPTで話す</span><span><b>2</b>自動で反映</span></div><div className="sync-actions"><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTを開く<ExternalLink size={12}/></button><button type="button" onClick={syncNow} disabled={!syncToken.trim() || syncStatus === 'connecting'}><RefreshCw size={15}/>受信を確認</button><button type="button" onClick={copySchemaUrl}>{copyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {copyStatus === 'copied' ? 'コピーしました' : '設定URLをコピー'}</button></div><code>{actionSchemaUrl}</code>{copyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。上のURLを長押ししてコピーしてください。</small>}<small>{syncMessage || '上の共通同期キーをGPT連携にも使います。日時などが曖昧なものだけ「要確認」に残します。'}</small></div></div>
+      <div className="settings-section gpt-link-section"><div><h2>GPT双方向連携</h2><p>予定の追加だけでなく、必要な時にLady Butlerの記録を読んで提案へ反映します。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${syncStatus}`}><Cloud size={16}/><strong>{syncLabel}</strong></div><div className="gpt-flow-steps"><span><b>1</b>GPTで話す</span><span><b>2</b>記録を読み書き</span></div><div className="gpt-share-options"><strong>GPTへ共有する記録</strong><label><input type="checkbox" checked={effectiveSettings.gptShareTasks} onChange={e=>update('gptShareTasks',e.target.checked)}/><span>やること・予定</span></label><label><input type="checkbox" checked={effectiveSettings.gptShareMood} onChange={e=>update('gptShareMood',e.target.checked)}/><span>直近7日間の気分</span></label><label><input type="checkbox" checked={effectiveSettings.gptShareDiary} onChange={e=>update('gptShareDiary',e.target.checked)}/><span>直近5件の日記</span></label><small>GPTが相談に答える時だけ参照します。日記を長く引用しない設計です。</small></div><div className="sync-actions"><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTを開く<ExternalLink size={12}/></button><button type="button" onClick={syncNow} disabled={!syncToken.trim() || syncStatus === 'connecting'}><RefreshCw size={15}/>受信を確認</button><button type="button" onClick={copySchemaUrl}>{copyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {copyStatus === 'copied' ? 'コピーしました' : '設定URLをコピー'}</button></div><code>{actionSchemaUrl}</code>{copyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。上のURLを長押ししてコピーしてください。</small>}<small>{syncMessage || '上の共通同期キーをGPT連携にも使います。日時などが曖昧なものだけ「要確認」に残します。'}</small></div></div>
       <div className="settings-section backup-section"><div><h2>バックアップ</h2><p>やること、予定、日記、気分ログ、GPT受信箱をJSONで保存・復元できます。機種変更やスマホ利用前の保険です。</p></div><div className="backup-box"><div className="backup-actions"><button type="button" onClick={exportBackup}><Download size={15}/>書き出す</button><label><Upload size={15}/>読み込む<input type="file" accept="application/json,.json" onChange={e=>{ importBackup(e.target.files?.[0]); e.currentTarget.value='' }}/></label></div><small>{backupMessage || '自動同期とは別に、手元へ安全な控えを保存できます。'}</small></div></div>
       <div className="settings-section danger-zone"><div><h2>この端末の保存データ</h2><p>同期中は、この端末のデータを消してもクラウドから再び読み込まれます。</p></div><button onClick={() => confirm('この端末の保存データを削除しますか？')&&clear()}><Trash2 size={16}/>この端末から削除</button></div>
     </section>
@@ -718,7 +762,7 @@ function EventModal({ event: initial, save, close, notice: _notice }: { event: C
     const fixedEnd = Number.isNaN(end.getTime()) || end <= safeStart ? toLocalDateTimeValue(new Date(safeStart.getTime() + 60 * 60 * 1000)) : event.endAt
     save({...event,startAt:fixedStart,endAt:fixedEnd})
   }
-  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2><p className="modal-help">授業・バイト・面談など、開始時刻と終了時刻があるものです。提出物や買い物は「やること」に入れましょう。</p></div><button type="button" onClick={close} aria-label="予定の編集を閉じる" title="閉じる"><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid event-date-grid"><Field label="開始日"><input value={datePart(event.startAt)} onChange={e=>updateStart('date',e.target.value)} placeholder="2026-07-03" inputMode="numeric"/></Field><Field label="開始時刻"><input value={timePart(event.startAt)} onChange={e=>updateStart('time',e.target.value)} placeholder="13:00" inputMode="numeric"/></Field><Field label="終了日"><input value={datePart(event.endAt)} onChange={e=>updateEnd('date',e.target.value)} placeholder="2026-07-03" inputMode="numeric"/></Field><Field label="終了時刻"><input value={timePart(event.endAt)} onChange={e=>updateEnd('time',e.target.value)} placeholder="14:00" inputMode="numeric"/></Field><Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2><p className="modal-help">授業・バイト・面談など、開始時刻と終了時刻があるものです。提出物や買い物は「やること」に入れましょう。</p></div><button type="button" onClick={close} aria-label="予定の編集を閉じる" title="閉じる"><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid event-date-grid"><Field label="開始日"><input type="date" value={datePart(event.startAt)} onChange={e=>updateStart('date',e.target.value)}/></Field><Field label="開始時刻"><input type="time" value={timePart(event.startAt)} onChange={e=>updateStart('time',e.target.value)}/></Field><Field label="終了日"><input type="date" value={datePart(event.endAt)} onChange={e=>updateEnd('date',e.target.value)}/></Field><Field label="終了時刻"><input type="time" value={timePart(event.endAt)} onChange={e=>updateEnd('time',e.target.value)}/></Field><Field label="繰り返し"><select value={event.recurrence || 'none'} onChange={e=>setEvent(previous => ({...previous, recurrence: e.target.value as CalendarEvent['recurrence']}))}><option value="none">繰り返さない</option><option value="daily">毎日</option><option value="weekly">毎週</option><option value="monthly">毎月</option></select></Field>{event.recurrence && event.recurrence !== 'none' ? <Field label="繰り返し終了"><input type="date" min={datePart(event.startAt)} value={event.recurrenceUntil || ''} onChange={e=>update('recurrenceUntil',e.target.value)}/></Field> : <div/>}<Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
 }
 
 function TaskModal({ task: initial, save, close, notice: _notice }: { task: Task; save:(t:Task)=>void; close:()=>void; notice?: string[] }) {
