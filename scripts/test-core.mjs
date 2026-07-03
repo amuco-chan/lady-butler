@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import gptInboxHandler from '../api/gpt-inbox.js'
-import { dayPlan, defaultSettings, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
+import { dayPlan, defaultSettings, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, rankedTasks, sampleTasks, scheduleLoadFor, taskLimitForSchedule } from '../src/lib.ts'
 
 async function callGptInbox(body, options = {}) {
   let responseBody = ''
@@ -35,6 +35,10 @@ assert.equal(scheduleLoadFor(1, 250), 'heavy')
 assert.equal(taskLimitForSchedule(3, 'normal', 'heavy'), 1)
 assert.equal(taskLimitForSchedule(5, 'good', 'heavy'), 2)
 assert.equal(taskLimitForSchedule(3, 'normal', 'medium'), 2)
+assert.deepEqual(formatDeadline(''), { date: '未設定', label: '締切未設定', urgent: false })
+const invalidDeadlineTask = { ...sampleTasks[0], id: 'invalid-deadline', deadline: '', priority: '中', progress: 0 }
+const validDeadlineTask = { ...sampleTasks[0], id: 'valid-deadline', deadline: new Date(Date.now() + 86400000).toISOString(), priority: '中', progress: 0 }
+assert.equal(rankedTasks([invalidDeadlineTask, validDeadlineTask]).at(-1).id, 'invalid-deadline')
 
 assert.match(moodGuidance('tired'), /詰め込む日ではありません/)
 assert.match(moodTrend([{ id: '1', date: '2026-06-24', mood: 'tired', memo: '', createdAt: '', updatedAt: '' }]), /最近の気分/)
@@ -87,6 +91,22 @@ const eventWithoutTime = normalizeGptInboxPayload({
   event: { title: '病院の予約', memo: '時刻は未確認' },
 })
 assert.equal(eventWithoutTime[0].type, 'event')
+assert.equal(eventWithoutTime[0].startIsFallback, true)
+assert.equal(eventWithoutTime[0].confidence, 'low')
+assert.deepEqual(eventWithoutTime[0].ambiguities, ['開始日時未指定'])
+
+const taskWithoutDeadline = normalizeGptInboxPayload({
+  task: { title: '洗剤を買う' },
+})
+assert.equal(taskWithoutDeadline[0].type, 'task')
+assert.equal(taskWithoutDeadline[0].deadlineIsFallback, true)
+assert.equal(taskWithoutDeadline[0].confidence, 'medium')
+assert.deepEqual(taskWithoutDeadline[0].ambiguities, ['締切未指定'])
+
+const apiTaskWithoutDeadline = await callGptInbox({ items: [{ type: 'task', title: '洗剤を買う' }] })
+assert.equal(apiTaskWithoutDeadline.body.items[0].deadlineIsFallback, true)
+assert.equal(apiTaskWithoutDeadline.body.items[0].confidence, 'medium')
+assert.deepEqual(apiTaskWithoutDeadline.body.items[0].ambiguities, ['締切未指定'])
 
 const apiDeadline = await callGptInbox({
   sourceText: '金曜18時までにレポートを提出する',
