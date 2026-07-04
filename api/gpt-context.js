@@ -58,6 +58,16 @@ async function readEnvelope(config) {
 
 const list = value => Array.isArray(value) ? value.filter(item => item && typeof item === 'object') : []
 const score = { very_good: 5, good: 4, normal: 3, tired: 2, exhausted: 1 }
+const timeZone = 'Asia/Tokyo'
+
+function localParts(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(date)
+  return Object.fromEntries(parts.map(part => [part.type, part.value]))
+}
 
 function contextFrom(envelope) {
   const data = envelope?.data && typeof envelope.data === 'object' ? envelope.data : {}
@@ -67,7 +77,9 @@ function contextFrom(envelope) {
   const shareDiary = settings.gptShareDiary !== false
   const now = new Date()
   const nowIso = now.toISOString()
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const local = localParts(now)
+  const today = `${local.year}-${local.month}-${local.day}`
+  const currentLocalDateTime = `${today}T${local.hour}:${local.minute}`
 
   const tasks = shareTasks ? list(data.tasks)
     .filter(task => task.status !== '完了')
@@ -101,7 +113,10 @@ function contextFrom(envelope) {
   return {
     ok: true,
     generatedAt: nowIso,
+    currentLocalDateTime,
     today,
+    timeZone,
+    locale: 'ja-JP',
     profile: { name: text(settings.name) || 'レディ', tone: settings.tone || '執事', strictness: settings.strictness || '標準' },
     sharing: { tasksAndEvents: shareTasks, mood: shareMood, diary: shareDiary },
     summary: { openTaskCount: tasks.length, upcomingEventCount: events.length, recentMoodCount: moodLogs.length, recentDiaryCount: diaries.length },
@@ -110,7 +125,7 @@ function contextFrom(envelope) {
     moodLogs,
     diaries,
     guidance,
-    usageNote: '必要な内容だけ自然に反映し、日記を長く引用しないでください。記録がない項目は推測しないでください。',
+    usageNote: '必要な内容だけ自然に反映し、日記を長く引用しないでください。記録がない項目は推測しないでください。相対日付はcurrentLocalDateTimeとtimeZoneを基準に絶対日時へ直してください。ユーザーが記録しないでと明言した内容は送信しないでください。',
   }
 }
 
@@ -121,7 +136,8 @@ export default async function handler(req, res) {
   if (!config) return
   try {
     const envelope = await readEnvelope(config)
-    return send(res, 200, envelope ? contextFrom(envelope) : { ok: true, exists: false, message: 'Lady Butlerにはまだ同期データがありません。', tasks: [], events: [], moodLogs: [], diaries: [] })
+    const context = contextFrom(envelope || { data: {} })
+    return send(res, 200, envelope ? context : { ...context, exists: false, message: 'Lady Butlerにはまだ同期データがありません。' })
   } catch (error) {
     return send(res, 500, { ok: false, error: 'Lady Butlerの記録を読み取れませんでした。', detail: String(error?.message || error) })
   }
