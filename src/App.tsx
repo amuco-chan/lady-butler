@@ -43,6 +43,18 @@ type AppBackup = {
 
 type GptSyncStatus = 'off' | 'connecting' | 'connected' | 'unconfigured' | 'invalid' | 'error'
 type DeviceSyncStatus = 'off' | 'connecting' | 'syncing' | 'synced' | 'unconfigured' | 'invalid' | 'error'
+type PushStatus = 'off' | 'registering' | 'ready' | 'unsupported' | 'unconfigured' | 'invalid' | 'error'
+
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
+
+const applicationServerKey = (value: string) => {
+  const padding = '='.repeat((4 - value.length % 4) % 4)
+  const raw = atob((value + padding).replaceAll('-', '+').replaceAll('_', '/'))
+  return Uint8Array.from(raw, character => character.charCodeAt(0))
+}
 
 const normalizeCloudData = (value: unknown): AppBackup => {
   const data = value && typeof value === 'object' ? value as AppBackup : {}
@@ -77,6 +89,8 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState('')
   const [deviceSyncStatus, setDeviceSyncStatus] = useState<DeviceSyncStatus>(syncToken ? 'connecting' : 'off')
   const [deviceSyncMessage, setDeviceSyncMessage] = useState('')
+  const [pushStatus, setPushStatus] = useState<PushStatus>('off')
+  const [pushMessage, setPushMessage] = useState('')
   const [editing, setEditing] = useState<Task | null>(null)
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null)
   const [reviewingInbox, setReviewingInbox] = useState<GptInboxItem | null>(null)
@@ -94,6 +108,7 @@ export default function App() {
     const end = new Date(start); end.setHours(23, 59, 59, 999)
     return expandRecurringEvents(events, start, end).length
   }, [events])
+  const openTaskCount = useMemo(() => tasks.filter(task => task.status !== '完了').length, [tasks])
   const changePage = (p: Page) => { setPage(p); setMenu(false) }
   const saveTask = (task: Task) => {
     setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task])
@@ -360,6 +375,74 @@ export default function App() {
     return () => { window.clearTimeout(firstCheck); window.clearInterval(timer) }
   }, [syncGptInbox, syncToken])
 
+  const syncPushSubscription = useCallback(async (askPermission: boolean) => {
+    if (typeof Notification === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatus('unsupported')
+      setPushMessage('この端末ではバックグラウンド通知を利用できません。iPhoneはホーム画面に追加してからお試しください。')
+      return 'unsupported' as const
+    }
+    const token = syncToken.trim()
+    if (!token) {
+      setPushStatus('invalid')
+      setPushMessage('先に「共通の同期キー」を設定してください。')
+      return Notification.permission
+    }
+    setPushStatus('registering')
+    try {
+      const permission = askPermission ? await Notification.requestPermission() : Notification.permission
+      if (permission !== 'granted') {
+        setPushStatus(permission === 'denied' ? 'invalid' : 'off')
+        setPushMessage(permission === 'denied' ? '通知が拒否されています。端末の設定から許可してください。' : '通知の許可を待っています。')
+        return permission
+      }
+      const configResponse = await fetch('/api/push-subscription', { cache: 'no-store' })
+      const config = await configResponse.json().catch(() => ({}))
+      if (!configResponse.ok || !config.available || !config.publicKey) {
+        setPushStatus('unconfigured')
+        setPushMessage('バックグラウンド通知の準備中です。アプリ内の指定時刻通知は使えます。')
+        return permission
+      }
+      const registration = await navigator.serviceWorker.ready
+      let subscription = await registration.pushManager.getSubscription()
+      if (!subscription && !askPermission) {
+        setPushStatus('off')
+        return permission
+      }
+      if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: applicationServerKey(config.publicKey) })
+      const response = await fetch('/api/push-subscription', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          subscription: subscription.toJSON(),
+          name: settings.name || 'レディ',
+          tone: settings.tone,
+          openTasks: openTaskCount,
+          todayEvents: todayEventCount,
+          enabled: settings.remindersEnabled,
+        }),
+      })
+      if (response.status === 401) {
+        setPushStatus('invalid')
+        setPushMessage('同期キーが一致していません。')
+        return permission
+      }
+      if (!response.ok) throw new Error('push registration failed')
+      setPushStatus(settings.remindersEnabled || askPermission ? 'ready' : 'off')
+      setPushMessage(settings.remindersEnabled || askPermission ? 'アプリを閉じていても、毎朝8時ごろに執事から届きます。' : '毎日の確認通知はオフです。')
+      return permission
+    } catch {
+      setPushStatus('error')
+      setPushMessage('バックグラウンド通知を登録できませんでした。アプリ内通知は引き続き使えます。')
+      return typeof Notification === 'undefined' ? 'unsupported' as const : Notification.permission
+    }
+  }, [openTaskCount, settings.name, settings.remindersEnabled, settings.tone, syncToken, todayEventCount])
+
+  useEffect(() => {
+    if (!syncToken.trim() || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    const timer = window.setTimeout(() => syncPushSubscription(false), 1500)
+    return () => window.clearTimeout(timer)
+  }, [openTaskCount, settings.remindersEnabled, settings.name, settings.tone, syncPushSubscription, syncToken, todayEventCount])
+
   useEffect(() => {
     if (!syncToken.trim()) {
       cloudReady.current = false
@@ -440,7 +523,7 @@ export default function App() {
       const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
       const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
       const todayEvents = expandRecurringEvents(events, dayStart, dayEnd).length
-      new Notification('Lady Butler', { body: butlerNotification(settings.name, openTasks, todayEvents, `${localDate(now)}|${settings.tone}`) })
+      new Notification('Lady Butler', { body: butlerNotification(settings.name, openTasks, todayEvents, `${localDate(now)}|${settings.tone}`), icon: '/app-icon-192.png', tag: 'lady-daily-reminder' })
       localStorage.setItem(key, 'sent')
     }
     tick()
@@ -459,17 +542,48 @@ export default function App() {
     <main>
       <header className="topbar"><button className="icon-button menu-button" type="button" aria-label="メニューを開く" title="メニューを開く" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTで話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" type="button" onClick={() => { setReviewingInbox(null); page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask()) }}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
       <div className="page-wrap">
+        {page === 'home' && <InstallPrompt/>}
         {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
         {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete}/>}
         {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
         {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
-        {page === 'settings' && <SettingsPage settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken} syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)} deviceSyncStatus={deviceSyncStatus} deviceSyncMessage={deviceSyncMessage} deviceSyncNow={() => pullDeviceData(false)} backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}/>}
+        {page === 'settings' && <SettingsPage
+          settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken}
+          syncStatus={syncStatus} syncMessage={syncMessage} syncNow={() => syncGptInbox(false)}
+          deviceSyncStatus={deviceSyncStatus} deviceSyncMessage={deviceSyncMessage} deviceSyncNow={() => pullDeviceData(false)}
+          pushStatus={pushStatus} pushMessage={pushMessage} enablePush={() => syncPushSubscription(true)}
+          backup={backup} restore={restoreBackup} clear={() => { localStorage.clear(); location.reload() }}
+        />}
       </div>
     </main>
     <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
     {editing && <TaskModal task={editing} save={saveTask} close={() => { setEditing(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'task' ? reviewingInbox.ambiguities : undefined}/>}
     {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => { setEditingEvent(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'event' ? reviewingInbox.ambiguities : undefined}/>}
   </div>
+}
+
+function InstallPrompt() {
+  const [promptEvent, setPromptEvent] = useState<InstallPromptEvent | null>(null)
+  const [dismissed, setDismissed] = useState(() => sessionStorage.getItem('lady.install.dismissed') === 'yes')
+  const [installed, setInstalled] = useState(() => window.matchMedia('(display-mode: standalone)').matches || ('standalone' in navigator && Boolean((navigator as Navigator & { standalone?: boolean }).standalone)))
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent)
+  useEffect(() => {
+    const capture = (event: Event) => { event.preventDefault(); setPromptEvent(event as InstallPromptEvent) }
+    const complete = () => { setInstalled(true); setPromptEvent(null) }
+    window.addEventListener('beforeinstallprompt', capture)
+    window.addEventListener('appinstalled', complete)
+    return () => { window.removeEventListener('beforeinstallprompt', capture); window.removeEventListener('appinstalled', complete) }
+  }, [])
+  if (installed || dismissed || (!isIos && !promptEvent)) return null
+  const dismiss = () => { sessionStorage.setItem('lady.install.dismissed', 'yes'); setDismissed(true) }
+  const install = async () => {
+    if (!promptEvent) return
+    await promptEvent.prompt()
+    const choice = await promptEvent.userChoice
+    if (choice.outcome === 'accepted') setInstalled(true)
+    setPromptEvent(null)
+  }
+  return <section className="install-prompt" aria-label="アプリとして使う"><div className="install-icon">L</div><div><strong>ホーム画面から、すぐ執事を呼べます</strong><p>{isIos ? '共有ボタンを押し、「ホーム画面に追加」を選んでください。' : 'ブラウザの枠がない、アプリらしい画面で使えます。'}</p></div>{promptEvent && <button className="primary" type="button" onClick={install}><Download size={15}/>追加する</button>}<button className="icon-button" type="button" aria-label="案内を閉じる" title="閉じる" onClick={dismiss}><X size={16}/></button></section>
 }
 
 function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
@@ -660,7 +774,7 @@ function DiaryPage({ settings, moodLogs, diaries, saveMood, saveDiary }: { setti
 
 function Field({ label, children, wide, required }: { label:string; children:React.ReactNode; wide?:boolean; required?:boolean }) { return <label className={wide?'field wide':'field'}><span>{label}{required&&<b>*</b>}</span>{children}</label> }
 
-function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStatus, syncMessage, syncNow, deviceSyncStatus, deviceSyncMessage, deviceSyncNow, backup, restore, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; syncToken: string; setSyncToken: React.Dispatch<React.SetStateAction<string>>; syncStatus: GptSyncStatus; syncMessage: string; syncNow: () => void; deviceSyncStatus: DeviceSyncStatus; deviceSyncMessage: string; deviceSyncNow: () => void; backup: AppBackup; restore:(data: AppBackup)=>boolean; clear:()=>void }) {
+function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStatus, syncMessage, syncNow, deviceSyncStatus, deviceSyncMessage, deviceSyncNow, pushStatus, pushMessage, enablePush, backup, restore, clear }: { settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; syncToken: string; setSyncToken: React.Dispatch<React.SetStateAction<string>>; syncStatus: GptSyncStatus; syncMessage: string; syncNow: () => void; deviceSyncStatus: DeviceSyncStatus; deviceSyncMessage: string; deviceSyncNow: () => void; pushStatus: PushStatus; pushMessage: string; enablePush: () => Promise<NotificationPermission | 'unsupported'>; backup: AppBackup; restore:(data: AppBackup)=>boolean; clear:()=>void }) {
   const [backupMessage, setBackupMessage] = useState('')
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle')
   const [tokenCopyStatus, setTokenCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle')
@@ -684,8 +798,7 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
     .filter(time => !Number.isNaN(time))
   const lastActivity = activityTimes.length ? new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(Math.max(...activityTimes))) : 'まだなし'
   const requestNotifications = async () => {
-    if (typeof Notification === 'undefined') { setNotificationStatus('unsupported'); return }
-    const result = await Notification.requestPermission()
+    const result = await enablePush()
     setNotificationStatus(result)
     if (result === 'granted') update('remindersEnabled', true)
   }
@@ -730,7 +843,7 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
     <section className="card settings-card">
       <div className="settings-section"><div><h2>プロフィール</h2><p>執事がお呼びする名前です。</p></div><Field label="お呼びする名前"><input value={effectiveSettings.name} onChange={e=>update('name',e.target.value)} /></Field></div>
       <div className="settings-section"><div><h2>執事の振る舞い</h2><p>いつでも後から変更できます。</p></div><div className="setting-controls"><Field label="口調"><select value={effectiveSettings.tone} onChange={e=>update('tone',e.target.value as Settings['tone'])}><option>執事</option><option>やさしい</option><option>簡潔</option><option>イケメン</option></select></Field><Field label="厳しさ"><select value={effectiveSettings.strictness} onChange={e=>update('strictness',e.target.value as Settings['strictness'])}><option>やさしめ</option><option>標準</option><option>厳しめ</option></select></Field><Field label="通知頻度"><select value={effectiveSettings.notifications} onChange={e=>update('notifications',e.target.value as Settings['notifications'])}><option>少なめ</option><option>標準</option><option>多め</option></select></Field></div></div>
-      <div className="settings-section notification-section"><div><h2>通知</h2><p>アプリを開いている間、指定時刻に今日の確認を通知します。アプリを閉じていても届くスマホ通知は未対応です。</p></div><div className="notification-box"><div className="setting-controls reminder-controls"><Field label="通知時刻"><input type="time" value={effectiveSettings.reminderTime} onChange={e=>update('reminderTime',e.target.value || defaultSettings.reminderTime)}/></Field><label className="toggle-row"><input type="checkbox" checked={effectiveSettings.remindersEnabled} onChange={e=>update('remindersEnabled',e.target.checked)}/><span>毎日の確認通知</span></label></div>{notificationStatus === 'default' ? <div className="backup-actions"><button type="button" onClick={requestNotifications}><Bell size={15}/>通知を許可</button></div> : <div className={`notification-permission-state permission-${notificationStatus}`} role="status"><Bell size={15}/><span>{notificationStatus === 'granted' ? '通知は許可済み' : notificationStatus === 'denied' ? '通知はブラウザ設定で拒否中' : 'このブラウザは通知に非対応'}</span></div>}<small>{notificationStatus === 'denied' ? '通知を使う場合は、ブラウザのサイト設定からLady Butlerの通知を許可してください。' : notificationStatus === 'unsupported' ? 'このブラウザでは通知に対応していません。' : 'この通知は、Lady Butlerを開いている間だけ動きます。'}</small></div></div>
+      <div className="settings-section notification-section"><div><h2>通知</h2><p>開いている時は指定時刻、閉じている時も毎朝8時ごろに今日の確認をお届けします。</p></div><div className="notification-box"><div className="setting-controls reminder-controls"><Field label="アプリ内の通知時刻"><input type="time" value={effectiveSettings.reminderTime} onChange={e=>update('reminderTime',e.target.value || defaultSettings.reminderTime)}/></Field><label className="toggle-row"><input type="checkbox" checked={effectiveSettings.remindersEnabled} onChange={e=>update('remindersEnabled',e.target.checked)}/><span>毎日の確認通知</span></label></div>{notificationStatus === 'default' || pushStatus === 'off' || pushStatus === 'error' || pushStatus === 'invalid' || pushStatus === 'unconfigured' ? <div className="backup-actions"><button type="button" onClick={requestNotifications} disabled={pushStatus === 'registering'}><Bell size={15}/>{pushStatus === 'registering' ? '登録中…' : 'バックグラウンド通知を有効にする'}</button></div> : <div className={`notification-permission-state permission-${notificationStatus}`} role="status"><Bell size={15}/><span>{pushStatus === 'ready' ? '閉じていても通知します' : notificationStatus === 'granted' ? '通知は許可済み' : notificationStatus === 'denied' ? '通知はブラウザ設定で拒否中' : 'このブラウザは通知に非対応'}</span></div>}<small>{pushMessage || (notificationStatus === 'denied' ? '通知を使う場合は、ブラウザのサイト設定からLady Butlerの通知を許可してください。' : notificationStatus === 'unsupported' ? 'iPhoneはホーム画面に追加してから、通知を有効にしてください。' : '共通の同期キーを使って、この端末だけに安全に配信します。')}</small></div></div>
       <div className="settings-section data-section"><div><h2>データ診断</h2><p>今この端末に、どれくらい記録があるか確認できます。</p></div><div className="data-health"><div>{counts.map(([label, value]) => <article key={label}><Database size={15}/><span>{label}</span><strong>{value}</strong></article>)}</div><small>保存サイズ 約{dataSize}KB ・ 最新更新 {lastActivity}</small></div></div>
       <div className="settings-section device-sync-section"><div><h2>PC・スマホ同期</h2><p>スマホで同じ同期キーを入力すると、やること・予定・日記・気分・設定が自動で揃います。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${deviceSyncStatus}`} role="status"><Cloud size={16}/><strong>{deviceSyncLabel}</strong></div><div className="device-flow-steps"><span><b>1</b>スマホでアプリを開く</span><span><b>2</b>同じキーを貼り付ける</span></div><Field label="共通の同期キー"><input type="password" autoComplete="off" value={syncToken} onChange={e=>setSyncToken(e.target.value)} placeholder="PCとスマホで同じキー"/></Field><div className="sync-actions"><button type="button" onClick={deviceSyncNow} disabled={!syncToken.trim() || deviceSyncStatus === 'connecting' || deviceSyncStatus === 'syncing'}><RefreshCw size={15}/>今すぐ同期</button><button type="button" onClick={copySyncToken} disabled={!syncToken.trim()}>{tokenCopyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {tokenCopyStatus === 'copied' ? 'キーをコピーしました' : '同期キーをコピー'}</button></div>{tokenCopyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。同期キー欄を長押ししてコピーしてください。</small>}<small>{deviceSyncMessage || '同期キーは端末内だけに保存され、クラウドには記録されません。'}</small></div></div>
       <div className="settings-section gpt-link-section"><div><h2>GPT双方向連携</h2><p>予定の追加だけでなく、必要な時にLady Butlerの記録を読んで提案へ反映します。</p></div><div className="gpt-link-box sync-box"><div className={`sync-state sync-${syncStatus}`}><Cloud size={16}/><strong>{syncLabel}</strong></div><div className="gpt-flow-steps"><span><b>1</b>GPTで話す</span><span><b>2</b>記録を読み書き</span></div><div className="gpt-share-options"><strong>GPTへ共有する記録</strong><label><input type="checkbox" checked={effectiveSettings.gptShareTasks} onChange={e=>update('gptShareTasks',e.target.checked)}/><span>やること・予定</span></label><label><input type="checkbox" checked={effectiveSettings.gptShareMood} onChange={e=>update('gptShareMood',e.target.checked)}/><span>直近7日間の気分</span></label><label><input type="checkbox" checked={effectiveSettings.gptShareDiary} onChange={e=>update('gptShareDiary',e.target.checked)}/><span>直近5件の日記</span></label><small>GPTが相談に答える時だけ参照します。日記を長く引用しない設計です。</small></div><div className="sync-actions"><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTを開く<ExternalLink size={12}/></button><button type="button" onClick={syncNow} disabled={!syncToken.trim() || syncStatus === 'connecting'}><RefreshCw size={15}/>受信を確認</button><button type="button" onClick={copySchemaUrl}>{copyStatus === 'copied' ? <Check size={15}/> : <Copy size={15}/>} {copyStatus === 'copied' ? 'コピーしました' : '設定URLをコピー'}</button></div><code>{actionSchemaUrl}</code>{copyStatus === 'error' && <small className="copy-error" role="alert">コピーできませんでした。上のURLを長押ししてコピーしてください。</small>}<small>{syncMessage || '上の共通同期キーをGPT連携にも使います。日時などが曖昧なものだけ「要確認」に残します。'}</small></div></div>
