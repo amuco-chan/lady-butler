@@ -151,12 +151,28 @@ const taskWithoutDeadline = normalizeGptInboxPayload({
 assert.equal(taskWithoutDeadline[0].type, 'task')
 assert.equal(taskWithoutDeadline[0].deadlineIsFallback, true)
 assert.equal(taskWithoutDeadline[0].confidence, 'medium')
-assert.deepEqual(taskWithoutDeadline[0].ambiguities, ['締切未指定'])
+assert.equal(taskWithoutDeadline[0].deadline, '')
+assert.deepEqual(taskWithoutDeadline[0].ambiguities, [])
 
 const apiTaskWithoutDeadline = await callGptInbox({ items: [{ type: 'task', title: '洗剤を買う' }] })
 assert.equal(apiTaskWithoutDeadline.body.items[0].deadlineIsFallback, true)
 assert.equal(apiTaskWithoutDeadline.body.items[0].confidence, 'medium')
-assert.deepEqual(apiTaskWithoutDeadline.body.items[0].ambiguities, ['締切未指定'])
+assert.equal(apiTaskWithoutDeadline.body.items[0].deadline, '')
+assert.deepEqual(apiTaskWithoutDeadline.body.items[0].ambiguities, [])
+
+const invalidTaskDate = normalizeGptInboxPayload({
+  items: [{ type: 'task', title: 'レポートを提出する', deadline: '明日18時' }],
+})
+assert.equal(invalidTaskDate[0].deadline, '')
+assert.deepEqual(invalidTaskDate[0].ambiguities, ['締切の日時形式を確認'])
+assert.equal(canAutoAddInboxItem(invalidTaskDate[0]), false)
+
+const invalidEventDate = normalizeGptInboxPayload({
+  items: [{ type: 'event', title: '美容院', startAt: '明日15時' }],
+})
+assert.equal(invalidEventDate[0].startIsFallback, true)
+assert.deepEqual(invalidEventDate[0].ambiguities, ['開始日時を確認'])
+assert.equal(canAutoAddInboxItem(invalidEventDate[0]), false)
 
 const apiDeadline = await callGptInbox({
   sourceText: '金曜18時までにレポートを提出する',
@@ -186,7 +202,7 @@ assert.equal(smartCandidate.createdAt, '2026-07-01T10:00:00.000Z')
 assert.equal(canAutoAddInboxItem(gptItems[0]), true)
 assert.equal(canAutoAddInboxItem(gptEventItems[0]), true)
 assert.equal(canAutoAddInboxItem(eventWithoutTime[0]), false)
-assert.equal(canAutoAddInboxItem(taskWithoutDeadline[0]), false)
+assert.equal(canAutoAddInboxItem(taskWithoutDeadline[0]), true)
 
 const originalFetch = globalThis.fetch
 const originalSyncToken = process.env.SYNC_ACCESS_TOKEN
@@ -268,6 +284,9 @@ assert.equal(gptContext.body.tasks[0].title, '同期テスト')
 assert.equal(gptContext.body.events[0].title, 'ゼミ')
 assert.equal(gptContext.body.moodLogs[0].memo, '寝不足')
 assert.equal(gptContext.body.diaries[0].doneToday, '資料を開いた')
+assert.equal(gptContext.body.timeZone, 'Asia/Tokyo')
+assert.equal(gptContext.body.locale, 'ja-JP')
+assert.match(gptContext.body.currentLocalDateTime, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
 assert.match(gptContext.body.usageNote, /長く引用しない/)
 
 const unauthorizedContext = await callGptContext()
@@ -290,11 +309,18 @@ const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
-assert.equal(actionSchema.info.version, '2.0.0')
+assert.equal(actionSchema.info.version, '2.1.0')
 assert.equal(actionSchema.paths['/api/gpt-context'].get.operationId, 'getLadyButlerContext')
+assert.ok(actionSchema.paths['/api/gpt-context'].get.responses['200'].content['application/json'].schema.properties.currentLocalDateTime)
 assert.equal(actionSchema.paths['/api/gpt-context'].get['x-openai-isConsequential'], false)
 assert.equal(actionSchema.paths['/api/gpt-inbox'].post['x-openai-isConsequential'], false)
-assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /real future task or event/)
+assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /real future tasks or events/)
+assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /getLadyButlerContext/)
 assert.ok(actionSchema.paths['/api/gpt-inbox'].post.description.length <= 300)
+
+const gptInstructions = await readFile(new URL('../public/gpt-instructions.txt', import.meta.url), 'utf8')
+assert.match(gptInstructions, /currentLocalDateTime/)
+assert.match(gptInstructions, /締切がなくても/)
+assert.match(gptInstructions, /開始日と開始時刻/)
 
 console.log('コア機能テスト: OK')
