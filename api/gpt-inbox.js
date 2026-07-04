@@ -27,6 +27,10 @@ function text(value) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function shortText(value, max = 500) {
+  return text(value).slice(0, max)
+}
+
 function textList(value) {
   return Array.isArray(value) ? value.map(text).filter(Boolean).slice(0, 5) : []
 }
@@ -35,6 +39,31 @@ function number(value, fallback) {
   const parsed = typeof value === 'number' ? value : Number.parseInt(text(value), 10)
   if (!Number.isFinite(parsed)) return fallback
   return Math.min(720, Math.max(5, Math.round(parsed / 5) * 5))
+}
+
+function validDateParts(year, month, day) {
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function normalizeDate(value) {
+  const match = text(value).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return ''
+  const [, year, month, day] = match
+  return validDateParts(Number(year), Number(month), Number(day)) ? `${year}-${month}-${day}` : ''
+}
+
+function normalizeLocalDateTime(value, allowDateOnly = false) {
+  const raw = text(value)
+  if (allowDateOnly) {
+    const date = normalizeDate(raw)
+    if (date) return `${date}T23:59`
+  }
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/)
+  if (!match) return ''
+  const [, year, month, day, hour, minute] = match
+  if (!validDateParts(Number(year), Number(month), Number(day)) || Number(hour) > 23 || Number(minute) > 59) return ''
+  return `${year}-${month}-${day}T${hour}:${minute}`
 }
 
 function normalizeCategory(value, title) {
@@ -50,12 +79,14 @@ function normalizeCategory(value, title) {
 }
 
 function normalizeTask(raw, sourceText) {
-  const title = text(raw.title || raw.name)
+  const title = shortText(raw.title || raw.name, 120)
   if (!title) return null
   const priority = text(raw.priority)
-  const deadline = text(raw.deadline || raw.dueDate || raw.due_date)
+  const rawDeadline = text(raw.deadline || raw.dueDate || raw.due_date)
+  const deadline = normalizeLocalDateTime(rawDeadline, true)
+  const deadlineInvalid = !!rawDeadline && !deadline
   const deadlineIsFallback = !deadline
-  const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineIsFallback ? ['締切未指定'] : [])])].slice(0, 5)
+  const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineInvalid ? ['締切の日時形式を確認'] : [])])].slice(0, 5)
   return {
     type: 'task',
     title,
@@ -63,8 +94,8 @@ function normalizeTask(raw, sourceText) {
     category: normalizeCategory(raw.category, title),
     priority: allowedPriorities.has(priority) ? priority : '中',
     estimatedMinutes: number(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes, 60),
-    memo: text(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いたやること候補',
-    sourceText: text(raw.sourceText || raw.source_text) || sourceText,
+    memo: shortText(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いたやること候補',
+    sourceText: shortText(raw.sourceText || raw.source_text) || sourceText,
     confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : deadlineIsFallback ? 'medium' : 'high',
     ambiguities,
     deadlineIsFallback,
@@ -72,22 +103,31 @@ function normalizeTask(raw, sourceText) {
 }
 
 function normalizeEvent(raw, sourceText) {
-  const title = text(raw.title || raw.name || raw.summary)
+  const title = shortText(raw.title || raw.name || raw.summary, 120)
   if (!title) return null
-  const startAt = text(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
+  const rawStart = text(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
+  const rawEnd = text(raw.endAt || raw.end_at || raw.end || raw.until)
+  const startAt = normalizeLocalDateTime(rawStart)
+  const endAt = normalizeLocalDateTime(rawEnd)
+  const invalidStart = !!rawStart && !startAt
+  const invalidEnd = !!rawEnd && (!endAt || (startAt && endAt <= startAt))
   const startIsFallback = !startAt
-  const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(startIsFallback ? ['開始日時未指定'] : [])])].slice(0, 5)
+  const ambiguities = [...new Set([
+    ...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
+    ...(startIsFallback ? [invalidStart ? '開始日時を確認' : '開始日時未指定'] : []),
+    ...(invalidEnd ? ['終了日時を確認'] : []),
+  ])].slice(0, 5)
   const recurrence = text(raw.recurrence || raw.repeat || raw.frequency).toLowerCase()
   return {
     type: 'event',
     title,
     startAt,
-    endAt: text(raw.endAt || raw.end_at || raw.end || raw.until),
-    location: text(raw.location || raw.place || raw.where),
-    memo: text(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いた予定候補',
+    endAt: invalidEnd ? '' : endAt,
+    location: shortText(raw.location || raw.place || raw.where, 200),
+    memo: shortText(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いた予定候補',
     recurrence: allowedRecurrence.has(recurrence) ? recurrence : 'none',
-    recurrenceUntil: text(raw.recurrenceUntil || raw.recurrence_until || raw.repeatUntil || raw.repeat_until).slice(0, 10),
-    sourceText: text(raw.sourceText || raw.source_text) || sourceText,
+    recurrenceUntil: normalizeDate(raw.recurrenceUntil || raw.recurrence_until || raw.repeatUntil || raw.repeat_until),
+    sourceText: shortText(raw.sourceText || raw.source_text) || sourceText,
     confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : startIsFallback ? 'low' : 'high',
     ambiguities,
     startIsFallback,
@@ -207,7 +247,7 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'GET, POST or DELETE only' })
 
     const body = await readJson(req)
-    const sourceText = text(body.sourceText || body.source_text || body.originalText || body.original_text)
+    const sourceText = shortText(body.sourceText || body.source_text || body.originalText || body.original_text)
     const rawItems = [
       ...(Array.isArray(body.items) ? body.items : []),
       ...(Array.isArray(body.tasks) ? body.tasks.map(item => withType(item, 'task')) : []),
