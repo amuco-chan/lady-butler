@@ -435,6 +435,17 @@ export function normalizeEventEnd(startAt: string, value: unknown) {
   return normalized
 }
 
+function validIsoLocalDateTime(value: unknown, allowDateOnly = false) {
+  const text = textOf(value)
+  if (!text) return false
+  if (allowDateOnly && /^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const date = new Date(`${text}T00:00:00`)
+    return !Number.isNaN(date.getTime()) && localDate(date) === text
+  }
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(text)) return false
+  return !Number.isNaN(new Date(text).getTime())
+}
+
 export function normalizeEstimatedMinutes(value: unknown) {
   const number = typeof value === 'number' ? value : Number.parseInt(textOf(value), 10)
   if (!Number.isFinite(number)) return 60
@@ -459,13 +470,16 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
   const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
   const rawDeadline = raw.deadline || raw.dueDate || raw.due_date
-  const deadlineIsFallback = Boolean(raw.deadlineIsFallback) || !textOf(rawDeadline)
-  const ambiguities = [...new Set([...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineIsFallback ? ['締切未指定'] : [])])].slice(0, 5)
+  const hasDeadline = Boolean(textOf(rawDeadline))
+  const validDeadline = hasDeadline && validIsoLocalDateTime(rawDeadline, true)
+  const deadlineIsFallback = Boolean(raw.deadlineIsFallback) || !validDeadline
+  const deadlineInvalid = hasDeadline && !validDeadline
+  const ambiguities = [...new Set([...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineInvalid ? ['締切の日時形式を確認'] : [])])].slice(0, 5)
   return [{
     id: textOf(raw.id) || crypto.randomUUID(),
     type: 'task',
     title,
-    deadline: normalizeDeadline(rawDeadline),
+    deadline: validDeadline ? normalizeDeadline(rawDeadline) : '',
     category: normalizeCategory(raw.category, title),
     priority: normalizePriority(raw.priority),
     estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
@@ -483,11 +497,16 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
   if (!title) return []
   const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
   const rawStart = raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date
-  const startIsFallback = Boolean(raw.startIsFallback) || !textOf(rawStart)
-  const startAt = normalizeEventStart(rawStart)
+  const hasStart = Boolean(textOf(rawStart))
+  const validStart = hasStart && validIsoLocalDateTime(rawStart)
+  const startIsFallback = Boolean(raw.startIsFallback) || !validStart
+  const startAt = validStart ? normalizeEventStart(rawStart) : normalizeEventStart('')
   const endAt = normalizeEventEnd(startAt, raw.endAt || raw.end_at || raw.end || raw.until)
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
-  const ambiguities = [...new Set([...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(startIsFallback ? ['開始日時未指定'] : [])])].slice(0, 5)
+  const ambiguities = [...new Set([
+    ...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
+    ...(startIsFallback ? [hasStart ? '開始日時を確認' : '開始日時未指定'] : []),
+  ])].slice(0, 5)
   return [{
     id: textOf(raw.id) || crypto.randomUUID(),
     type: 'event',
@@ -525,7 +544,7 @@ export function normalizeGptInboxPayload(payload: unknown, now = new Date().toIS
 
 export function canAutoAddInboxItem(item: GptInboxItem) {
   if (item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0) return false
-  return item.type === 'task' ? !item.deadlineIsFallback : !item.startIsFallback
+  return item.type === 'task' || !item.startIsFallback
 }
 
 export function parseGptImportHash(hash: string) {
