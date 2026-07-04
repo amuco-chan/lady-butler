@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.0.0"
+    "version": "2.1.0"
   },
   "servers": [
     {
@@ -15,7 +15,7 @@
       "get": {
         "operationId": "getLadyButlerContext",
         "summary": "Read the user's current Lady Butler context",
-        "description": "Call when the user asks about their tasks, schedule, recent mood, diary, priorities, or what to do next. Do not call for unrelated conversation. Use only shared fields, quote diary text sparingly, and never invent missing records.",
+        "description": "Call when the user asks about tasks, schedule, mood, diary, priorities, or what to do next, and before resolving relative dates for a new item. Use currentLocalDateTime and timeZone as the date anchor. Do not call for unrelated conversation or invent missing records.",
         "x-openai-isConsequential": false,
         "responses": {
           "200": {
@@ -28,6 +28,12 @@
                     "ok": { "type": "boolean" },
                     "generatedAt": { "type": "string" },
                     "today": { "type": "string" },
+                    "currentLocalDateTime": {
+                      "type": "string",
+                      "description": "Current local date and time in Asia/Tokyo, formatted as YYYY-MM-DDTHH:mm. Use as the anchor for words such as today, tomorrow, and next Friday."
+                    },
+                    "timeZone": { "type": "string", "enum": ["Asia/Tokyo"] },
+                    "locale": { "type": "string", "enum": ["ja-JP"] },
                     "profile": { "type": "object", "additionalProperties": true },
                     "sharing": { "type": "object", "additionalProperties": true },
                     "summary": { "type": "object", "additionalProperties": true },
@@ -49,7 +55,7 @@
       "post": {
         "operationId": "sendCandidatesToLadyButler",
         "summary": "Naturally capture tasks and calendar plans in Lady Butler",
-        "description": "Call once when a real future task or event is mentioned. Do not ask the user to say add or register. Ignore hypotheticals, completed items, examples, and rejected plans. Split items. Never invent dates. Ask only when an event start is missing.",
+        "description": "Call once for real future tasks or events. Ignore hypotheticals, completed or rejected items, examples, and anything the user says not to record. For relative dates, call getLadyButlerContext first. Tasks may omit deadlines; events require a known date and time.",
         "x-openai-isConsequential": false,
         "requestBody": {
           "required": true,
@@ -80,11 +86,11 @@
                         },
                         "deadline": {
                           "type": "string",
-                          "description": "Task only. Deadline in ISO format. A phrase such as '18:00までに' belongs here, not in startAt. If unknown, omit it and mention the uncertainty in memo."
+                          "description": "Task only. Use YYYY-MM-DD or YYYY-MM-DDTHH:mm. A phrase such as '18:00までに' belongs here, not in startAt. If unknown, omit it; a task without a deadline is valid and should not be marked ambiguous."
                         },
                         "startAt": {
                           "type": "string",
-                          "description": "Event only. Known start date/time in ISO-like local format, such as 2026-06-25T14:00. Never use a task deadline here."
+                          "description": "Event only. Required known start date and time in YYYY-MM-DDTHH:mm, such as 2026-06-25T14:00. Never send relative Japanese text or a task deadline here."
                         },
                         "endAt": {
                           "type": "string",
@@ -125,7 +131,7 @@
                         "confidence": {
                           "type": "string",
                           "enum": ["high", "medium", "low"],
-                          "description": "Use high when type and essential date/time are explicit. Use medium for a task with a missing deadline or optional detail. Use low only to preserve another user-stated ambiguity. Ask one short clarification before sending an event whose start date or time is missing."
+                          "description": "Use high when the type is clear and, for an event, its start date and time are explicit. A task may still be high confidence without a deadline. Use low only for a genuine unresolved ambiguity. Ask one short clarification before sending an event whose start date or time is missing."
                         },
                         "ambiguities": {
                           "type": "array",
