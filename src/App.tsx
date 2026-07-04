@@ -523,7 +523,7 @@ export default function App() {
       const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
       const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
       const todayEvents = expandRecurringEvents(events, dayStart, dayEnd).length
-      new Notification('Lady Butler', { body: butlerNotification(settings.name, openTasks, todayEvents, `${localDate(now)}|${settings.tone}`), icon: '/app-icon-192.png', tag: 'lady-daily-reminder' })
+      new Notification('Lady Butler', { body: butlerNotification(settings.name, openTasks, todayEvents, `${localDate(now)}|${settings.tone}`), icon: '/app-icon.svg', tag: 'lady-daily-reminder' })
       localStorage.setItem(key, 'sent')
     }
     tick()
