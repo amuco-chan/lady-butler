@@ -4,8 +4,6 @@ const APP_SHELL = [
   ROOT,
   new URL('manifest.webmanifest', ROOT).href,
   new URL('app-icon.svg', ROOT).href,
-  new URL('app-icon-192.png', ROOT).href,
-  new URL('app-icon-512.png', ROOT).href,
 ]
 
 self.addEventListener('install', event => {
@@ -41,8 +39,8 @@ self.addEventListener('push', event => {
   try { data = event.data?.json() || {} } catch { data = { body: event.data?.text() || '' } }
   event.waitUntil(self.registration.showNotification(data.title || "Lady's Butler", {
     body: data.body || '本日の予定を一緒に整えましょう。',
-    icon: data.icon || 'app-icon-192.png',
-    badge: data.badge || 'app-icon-192.png',
+    icon: data.icon || 'app-icon.svg',
+    badge: data.badge || 'app-icon.svg',
     tag: data.tag || 'lady-daily-reminder',
     renotify: false,
     data: { url: data.url || ROOT },
