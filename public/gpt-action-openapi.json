@@ -3,6 +3,209 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
+    "version": "2.2.0"
+  },
+  "servers": [
+    {
+      "url": "https://lady-butler.vercel.app"
+    }
+  ],
+  "paths": {
+    "/api/gpt-context": {
+      "get": {
+        "operationId": "getLadyButlerContext",
+        "summary": "Read the user's current Lady Butler context",
+        "description": "Call when the user asks about tasks, schedule, mood, diary, priorities, or what to do next, and before resolving relative dates for a new item. Use currentLocalDateTime and timeZone as the date anchor. Do not call for unrelated conversation or invent missing records.",
+        "x-openai-isConsequential": false,
+        "responses": {
+          "200": {
+            "description": "Current user-approved tasks, events, mood logs, diary entries, and planning guidance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "generatedAt": { "type": "string" },
+                    "today": { "type": "string" },
+                    "currentLocalDateTime": {
+                      "type": "string",
+                      "description": "Current local date and time in Asia/Tokyo, formatted as YYYY-MM-DDTHH:mm. Use as the anchor for words such as today, tomorrow, and next Friday."
+                    },
+                    "timeZone": { "type": "string", "enum": ["Asia/Tokyo"] },
+                    "locale": { "type": "string", "enum": ["ja-JP"] },
+                    "profile": { "type": "object", "additionalProperties": true },
+                    "sharing": { "type": "object", "additionalProperties": true },
+                    "summary": { "type": "object", "additionalProperties": true },
+                    "tasks": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "events": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "moodLogs": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "diaries": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+                    "guidance": { "type": "string" },
+                    "usageNote": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "The GPT Action API key is missing or invalid" },
+          "503": { "description": "The private sync storage is not configured" }
+        }
+      }
+    },
+    "/api/gpt-inbox": {
+      "post": {
+        "operationId": "sendCandidatesToLadyButler",
+        "summary": "Naturally capture tasks and calendar plans in Lady Butler",
+        "description": "Call once for real future tasks or events. Ignore hypotheticals, completed or rejected items, examples, and anything the user says not to record. For relative dates, call getLadyButlerContext first. Tasks may omit deadlines; events require a known date and time.",
+        "x-openai-isConsequential": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceText": {
+                    "type": "string",
+                    "description": "Short Japanese paraphrase of the user's relevant words. Exclude unrelated or sensitive conversation details."
+                  },
+                  "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "description": "Every real future task or event mentioned in the same turn. Each candidate must explicitly declare type task or event.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": ["task", "event"],
+                          "description": "Use task for a completable/checkable action, even if its deadline has a time. Use event only for calendar time with a known start."
+                        },
+                        "title": {
+                          "type": "string",
+                          "description": "Short title in Japanese."
+                        },
+                        "deadline": {
+                          "type": "string",
+                          "description": "Task only. Use YYYY-MM-DD or YYYY-MM-DDTHH:mm. A phrase such as '18:00までに' belongs here, not in startAt. If unknown, omit it; a task without a deadline is valid and should not be marked ambiguous."
+                        },
+                        "startAt": {
+                          "type": "string",
+                          "description": "Event only. Required known start date and time in YYYY-MM-DDTHH:mm, such as 2026-06-25T14:00. Never send relative Japanese text or a task deadline here."
+                        },
+                        "endAt": {
+                          "type": "string",
+                          "description": "For event items only. End date/time in ISO-like local format. If unknown, omit it and the app will use about one hour."
+                        },
+                        "location": {
+                          "type": "string",
+                          "description": "Event only. Place, room, station, URL, or online location."
+                        },
+                        "recurrence": {
+                          "type": "string",
+                          "enum": ["none", "daily", "weekly", "monthly"],
+                          "description": "Event only. Use only when the user explicitly says the event repeats."
+                        },
+                        "recurrenceUntil": {
+                          "type": "string",
+                          "description": "Event only. Last recurrence date in YYYY-MM-DD when explicitly known."
+                        },
+                        "category": {
+                          "type": "string",
+                          "enum": ["課題", "授業", "生活", "バイト", "買い物", "その他"],
+                          "description": "Task only. Do not use 予定; calendar entries must use type event instead."
+                        },
+                        "priority": {
+                          "type": "string",
+                          "enum": ["高", "中", "低"]
+                        },
+                        "estimatedMinutes": {
+                          "type": "integer",
+                          "minimum": 5,
+                          "maximum": 720,
+                          "description": "Rough effort estimate in minutes."
+                        },
+                        "memo": {
+                          "type": "string",
+                          "description": "Useful note such as class name, report condition, first step, location details, or uncertainty."
+                        },
+                        "confidence": {
+                          "type": "string",
+                          "enum": ["high", "medium", "low"],
+                          "description": "Use high when the type is clear and, for an event, its start date and time are explicit. A task may still be high confidence without a deadline. Use low only for a genuine unresolved ambiguity. Ask one short clarification before sending an event whose start date or time is missing."
+                        },
+                        "ambiguities": {
+                          "type": "array",
+                          "maxItems": 5,
+                          "items": { "type": "string" },
+                          "description": "Short Japanese notes about unresolved details that the app should show as 要確認. Omit when there is no ambiguity."
+                        }
+                      },
+                      "required": ["type", "title"]
+                    }
+                  },
+                  "events": {
+                    "type": "array",
+                    "description": "Compatibility input for calendar events only. Each event must include a known startAt. Ask the user when the start time is unknown; never invent it.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "title": { "type": "string" },
+                        "startAt": { "type": "string" },
+                        "endAt": { "type": "string" },
+                        "location": { "type": "string" },
+                        "memo": { "type": "string" },
+                        "recurrence": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
+                        "recurrenceUntil": { "type": "string" }
+                      },
+                      "required": ["title", "startAt"]
+                    }
+                  }
+                },
+                "anyOf": [
+                  { "required": ["items"] },
+                  { "required": ["events"] }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Candidates synced directly or an import link returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "count": { "type": "integer" },
+                    "importUrl": {
+                      "type": "string",
+                      "description": "Present only for link delivery. Open this URL once to import candidates into Lady Butler."
+                    },
+                    "delivery": { "type": "string", "enum": ["synced", "link"] },
+                    "requiresOpen": { "type": "boolean" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "No valid task or event candidate was supplied" },
+          "401": { "description": "The GPT Action API key is missing or invalid" },
+          "503": { "description": "The private sync storage is not configured" }
+        }
+      }
+    }
+  }
+}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Lady Butler Personal Context",
+    "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
     "version": "2.1.0"
   },
   "servers": [
