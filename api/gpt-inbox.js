@@ -166,6 +166,14 @@ function syncAvailable() {
   return !!(redisConfig() && text(process.env.SYNC_ACCESS_TOKEN))
 }
 
+function actionToken() {
+  return text(process.env.GPT_ACTION_TOKEN || process.env.SYNC_ACCESS_TOKEN)
+}
+
+function actionSyncAvailable() {
+  return !!(redisConfig() && actionToken())
+}
+
 async function redisPipeline(commands) {
   const config = redisConfig()
   if (!config) throw new Error('sync storage is not configured')
@@ -227,6 +235,18 @@ function requireSyncAuth(req, res) {
   return true
 }
 
+function requireActionAuth(req, res) {
+  if (!actionSyncAvailable()) {
+    send(res, 503, { ok: false, error: 'GPT連携用ストレージが未設定です。' })
+    return false
+  }
+  if (!secureEqual(bearerToken(req), actionToken())) {
+    send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。' })
+    return false
+  }
+  return true
+}
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return send(res, 200, { ok: true })
 
@@ -263,8 +283,8 @@ export default async function handler(req, res) {
 
     if (!items.length) return send(res, 400, { ok: false, error: '候補の title が必要です。' })
 
-    if (syncAvailable()) {
-      if (!requireSyncAuth(req, res)) return
+    if (actionSyncAvailable()) {
+      if (!requireActionAuth(req, res)) return
       const queued = await saveQueue(items)
       return send(res, 200, {
         ok: true,
