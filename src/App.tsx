@@ -164,6 +164,21 @@ export default function App() {
       updatedAt: now.toISOString(),
     }, ...prev].slice(0, 1000))
   }
+  const logFocusTime = (minutes: number) => {
+    const addMinutes = Math.max(0, Math.round(minutes))
+    if (addMinutes <= 0) return
+    const now = new Date()
+    setTaskWorkLogs(prev => [{
+      id: crypto.randomUUID(),
+      taskId: 'focus-only',
+      taskTitle: '集中のみ',
+      minutes: addMinutes,
+      date: localDate(now),
+      memo: 'タスク指定なし',
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    }, ...prev].slice(0, 1000))
+  }
   const acceptInboxItem = (item: GptInboxItem) => {
     const duplicate = item.type === 'event' ? events.some(event => sameEventCandidate(event, item)) : tasks.some(task => sameTaskCandidate(task, item))
     if (!duplicate) {
@@ -588,7 +603,7 @@ export default function App() {
       <div className="page-wrap">
         {page === 'home' && <InstallPrompt/>}
         {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} taskWorkLogs={taskWorkLogs} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
-        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime}/>}
+        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime} logFocus={logFocusTime}/>}
         {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
         {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage
@@ -719,22 +734,23 @@ function WeekPlanCard({ mode, advice, tasks, events, minutes, lowMoodDays, go }:
   </section>
 }
 
-function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void }) {
+function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime, logFocus }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number) => void }) {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('未完了'), [sort, setSort] = useState('締切が近い順')
   let shown = tasks.filter(t => t.title.includes(query) && (filter === 'すべて' || filter === '未完了' ? filter === 'すべて' || t.status !== '完了' : t.status === filter))
   shown = [...shown].sort(sort === '優先度順' ? (a,b) => ({高:3,中:2,低:1}[b.priority]-{高:3,中:2,低:1}[a.priority]) : (a,b) => +new Date(a.deadline)-+new Date(b.deadline))
   const openCount = tasks.filter(t => t.status !== '完了').length
-  const loggedTotal = tasks.reduce((sum, task) => sum + taskActualMinutes(task), 0)
+  const loggedTotal = taskWorkLogs.reduce((sum, log) => sum + workLogMinutes(log), 0)
   const todayLogged = taskWorkLogs.filter(log => log.date === localDate()).reduce((sum, log) => sum + workLogMinutes(log), 0)
   const recentLogs = [...taskWorkLogs].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8)
-  const taskTitle = (log: TaskWorkLog) => tasks.find(task => task.id === log.taskId)?.title || log.taskTitle || '削除済みのやること'
+  const taskTitle = (log: TaskWorkLog) => log.taskId === 'focus-only' ? '集中のみ' : tasks.find(task => task.id === log.taskId)?.title || log.taskTitle || '削除済みのやること'
   return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了のやることがあります。今日の集中は{todayLogged}分、合計{loggedTotal}分です。</></PageHeading>
+    <section className="card focus-quick-card"><div><span>QUICK FOCUS</span><h2>集中だけ記録</h2><p>タスクを選ばずに、今できた集中時間だけ残せます。</p></div><div className="focus-quick-actions"><button className="time-chip" type="button" onClick={() => logFocus(10)} title="10分集中を記録" aria-label="タスクを指定せずに10分集中を記録">+10分</button><button className="time-chip" type="button" onClick={() => logFocus(25)} title="25分集中を記録" aria-label="タスクを指定せずに25分集中を記録">+25分</button><small>今日の集中 {todayLogged}分</small></div></section>
     <div className="toolbar"><label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="やることを検索"/></label><div className="segmented">{['未完了','すべて','進行中','完了'].map(v => <button className={filter === v ? 'active' : ''} onClick={() => setFilter(v)} key={v}>{v}</button>)}</div><label className="select-wrap"><select value={sort} onChange={e => setSort(e.target.value)}><option>締切が近い順</option><option>優先度順</option></select><ChevronDown size={15}/></label></div>
     <section className="card task-table"><div className="table-head"><span>やること</span><span>締切</span><span>進捗・時間</span><span>優先度</span><span>状態</span><span>記録</span></div>{shown.map(t => {
       const actual = taskActualMinutes(t)
       return <div className="table-row" key={t.id}><div className="task-title-cell"><button className={`check ${t.status === '完了' ? 'done' : ''}`} type="button" aria-label={`「${t.title}」を${t.status === '完了' ? '未完了に戻す' : '完了にする'}`} title={t.status === '完了' ? '未完了に戻す' : '完了にする'} onClick={() => complete(t.id)}>{t.status === '完了' ? <Check size={16}/> : <Circle size={21}/>}</button><div><strong>{t.title}</strong><span>{taskCategoryLabel(t.category)}{t.memo ? ` ・ ${t.memo}` : ''}</span></div></div><div><b className={formatDeadline(t.deadline).urgent ? 'urgent-text' : ''}>{formatDeadline(t.deadline).label}</b><span>{formatDeadline(t.deadline).date}</span></div><div className="inline-progress task-progress-time"><span>{t.progress}%</span><div><i style={{width:`${t.progress}%`}}/></div><small>集中 {actual}分 / 目安 {t.estimatedMinutes}分</small></div><div><span className={`badge priority-${t.priority}`}>{t.priority}</span></div><div><span className={`status status-${t.status}`}>{t.status}</span></div><div className="row-actions time-log-actions"><button className="time-chip" type="button" onClick={() => logTime(t.id, 10)} title="10分集中を記録" aria-label={`「${t.title}」に10分集中を記録`}>+10分</button><button className="time-chip" type="button" onClick={() => logTime(t.id, 25)} title="25分集中を記録" aria-label={`「${t.title}」に25分集中を記録`}>+25分</button><button type="button" onClick={() => edit(t)} title="編集" aria-label={`「${t.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={() => remove(t.id)} title="削除" aria-label={`「${t.title}」を削除`}><Trash2 size={16}/></button></div></div>
     })}{!shown.length && <Empty text="条件に合うやることはありません"/>}</section>
-    <section className="card work-log-card"><div className="section-title"><div><span>FOCUS LOG</span><h2>最近の集中ログ</h2></div><small>今日の集中 {todayLogged}分</small></div>{recentLogs.length ? <div className="work-log-list">{recentLogs.map(log => <article key={log.id}><div><strong>{workLogMinutes(log)}分</strong><span>{formatWorkLogTime(log.createdAt)}</span></div><p>{taskTitle(log)}</p></article>)}</div> : <div className="work-log-empty"><Clock3 size={18}/><p>集中できたら+10分、+25分。ここに履歴が残ります。</p></div>}</section>
+    <section className="card work-log-card"><div className="section-title"><div><span>FOCUS LOG</span><h2>最近の集中ログ</h2></div><small>今日の集中 {todayLogged}分</small></div>{recentLogs.length ? <div className="work-log-list">{recentLogs.map(log => <article key={log.id}><div><strong>{workLogMinutes(log)}分</strong><span>{formatWorkLogTime(log.createdAt)}</span></div><p>{taskTitle(log)}</p></article>)}</div> : <div className="work-log-empty"><Clock3 size={18}/><p>上のボタンか、タスク横の+10分・+25分で記録できます。</p></div>}</section>
   </>
 }
 
