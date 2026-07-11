@@ -86,3 +86,13 @@
 @media(max-width:520px){.install-prompt{margin:-22px 0 15px;padding:12px;gap:10px}.install-icon{width:34px;height:34px;flex-basis:34px;border-radius:9px}.install-prompt strong{font-size:11px;line-height:1.45}.install-prompt p{font-size:8px}.install-prompt>.primary{font-size:9px;padding:8px}.install-prompt>.icon-button{width:28px;height:28px;flex-basis:28px}}
 
 .notification-permission-state.permission-granted{background:#eef4f0;border-color:#cbdacf;color:#456452}.notification-box>.backup-actions button:disabled{opacity:.6;cursor:wait}
+
+/* Task time tracking */
+.task-table .table-head,.task-table .table-row{grid-template-columns:minmax(250px,1.7fr) 120px 145px 70px 85px minmax(170px,.7fr)}
+.task-progress-time{grid-template-columns:32px 1fr;row-gap:5px}
+.task-progress-time small{grid-column:1/-1;font-size:8px;color:#858984;white-space:nowrap}
+.time-log-actions{justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:5px}
+.row-actions .time-chip{border:1px solid #d8d1c5;background:#fff;color:#344854;padding:5px 7px;border-radius:2px;font-size:8px;line-height:1;white-space:nowrap}
+.row-actions .time-chip:hover{background:#f6f2e8;color:#172a3a}
+@media(max-width:1000px){.task-table .table-head,.task-table .table-row{grid-template-columns:minmax(220px,1.7fr) 110px 130px 62px minmax(150px,.8fr)}}
+@media(max-width:520px){.task-table .task-progress-time small{font-size:8px}.task-table .row-actions.time-log-actions{gap:6px;justify-content:flex-end}.task-table .row-actions .time-chip{width:auto;min-width:48px;height:34px;padding:0 8px;font-size:8px}}
