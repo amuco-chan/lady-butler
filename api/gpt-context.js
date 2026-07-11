@@ -97,6 +97,10 @@ function contextFrom(envelope) {
     .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()).slice(0, 30)
     .map(event => ({ id: shortText(event.id, 100), title: shortText(event.title, 120), startAt: shortText(event.startAt, 30), endAt: shortText(event.endAt, 30), location: shortText(event.location, 200), memo: shortText(event.memo, 500), recurrence: shortText(event.recurrence, 20) || 'none', recurrenceUntil: shortText(event.recurrenceUntil, 20) || null })) : []
 
+  const taskWorkLogs = shareTasks ? list(data.taskWorkLogs)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 20)
+    .map(log => ({ id: shortText(log.id, 100), taskId: shortText(log.taskId, 100), taskTitle: shortText(log.taskTitle, 120), minutes: Number(log.minutes) || 0, date: shortText(log.date, 20), createdAt: shortText(log.createdAt, 40) })) : []
+
   const moodLogs = shareMood ? list(data.moodLogs)
     .sort((a, b) => text(b.date).localeCompare(text(a.date))).slice(0, 7)
     .map(log => ({ date: shortText(log.date, 20), mood: shortText(log.mood, 20), memo: shortText(log.memo, 300) })) : []
@@ -121,8 +125,9 @@ function contextFrom(envelope) {
     locale: 'ja-JP',
     profile: { name: text(settings.name) || 'レディ', tone: settings.tone || '執事', strictness: settings.strictness || '標準' },
     sharing: { tasksAndEvents: shareTasks, mood: shareMood, diary: shareDiary },
-    summary: { openTaskCount: tasks.length, upcomingEventCount: events.length, recentMoodCount: moodLogs.length, recentDiaryCount: diaries.length },
+    summary: { openTaskCount: tasks.length, upcomingEventCount: events.length, recentWorkLogCount: taskWorkLogs.length, recentMoodCount: moodLogs.length, recentDiaryCount: diaries.length },
     tasks,
+    taskWorkLogs,
     events,
     moodLogs,
     diaries,
