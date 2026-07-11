@@ -96,3 +96,4 @@
 .row-actions .time-chip:hover{background:#f6f2e8;color:#172a3a}
 @media(max-width:1000px){.task-table .table-head,.task-table .table-row{grid-template-columns:minmax(220px,1.7fr) 110px 130px 62px minmax(150px,.8fr)}}
 @media(max-width:520px){.task-table .task-progress-time small{font-size:8px}.task-table .row-actions.time-log-actions{gap:6px;justify-content:flex-end}.task-table .row-actions .time-chip{width:auto;min-width:48px;height:34px;padding:0 8px;font-size:8px}}
+@media(max-width:520px){html,body,#root{overflow-x:hidden}.task-table .table-row{overflow:hidden}.task-table .table-row>div{min-width:0}.task-table .task-title-cell{align-items:flex-start}.task-table .task-title-cell strong,.task-table .task-title-cell span{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.55}.task-table .table-row>div:nth-child(2) span{white-space:normal}.task-table .row-actions.time-log-actions{max-width:100%;flex-wrap:wrap}}
