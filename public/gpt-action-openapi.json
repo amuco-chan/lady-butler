@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.3.0"
+    "version": "2.4.0"
   },
   "servers": [
     {
@@ -40,6 +40,11 @@
                     "tasks": {
                       "type": "array",
                       "description": "Current tasks. actualMinutes means the total minutes the user has already worked on that task.",
+                      "items": { "type": "object", "additionalProperties": true }
+                    },
+                    "taskWorkLogs": {
+                      "type": "array",
+                      "description": "Recent work sessions for tasks. Each item includes taskId, taskTitle, minutes, date, and createdAt.",
                       "items": { "type": "object", "additionalProperties": true }
                     },
                     "events": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
