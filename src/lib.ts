@@ -14,9 +14,9 @@ export function toLocalDateTimeValue(date: Date) {
 }
 
 export const sampleTasks: Task[] = [
-  { id: crypto.randomUUID(), title: '心理学レポートの構成を作る', deadline: todayAt(23, 1), category: '課題', priority: '高', progress: 25, estimatedMinutes: 90, status: '進行中', memo: '授業資料の第3章を引用する', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: crypto.randomUUID(), title: 'ゼミ発表の資料を確認', deadline: todayAt(18, 3), category: '授業', priority: '中', progress: 0, estimatedMinutes: 40, status: '未着手', memo: '先生のコメントを反映', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-  { id: crypto.randomUUID(), title: '日用品を買う', deadline: todayAt(20, 5), category: '買い物', priority: '低', progress: 0, estimatedMinutes: 20, status: '未着手', memo: '洗剤、ティッシュ', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: crypto.randomUUID(), title: '心理学レポートの構成を作る', deadline: todayAt(23, 1), category: '課題', priority: '高', progress: 25, estimatedMinutes: 90, actualMinutes: 0, status: '進行中', memo: '授業資料の第3章を引用する', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: crypto.randomUUID(), title: 'ゼミ発表の資料を確認', deadline: todayAt(18, 3), category: '授業', priority: '中', progress: 0, estimatedMinutes: 40, actualMinutes: 0, status: '未着手', memo: '先生のコメントを反映', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+  { id: crypto.randomUUID(), title: '日用品を買う', deadline: todayAt(20, 5), category: '買い物', priority: '低', progress: 0, estimatedMinutes: 20, actualMinutes: 0, status: '未着手', memo: '洗剤、ティッシュ', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
 ]
 
 export const defaultSettings: Settings = { tone: '執事', strictness: '標準', notifications: '標準', name: 'レディ', remindersEnabled: false, reminderTime: '21:30', gptShareTasks: true, gptShareMood: true, gptShareDiary: true }
@@ -40,6 +40,15 @@ export function rankedTasks(tasks: Task[]) {
     const urgencyB = Number.isFinite(parsedB) ? Math.max(0, 7 - (parsedB - Date.now()) / 86400000) : 0
     return (urgencyB + priorityWeight[b.priority] * 2 + (100 - b.progress) / 50) - (urgencyA + priorityWeight[a.priority] * 2 + (100 - a.progress) / 50)
   })
+}
+
+export function taskActualMinutes(task: Pick<Task, 'actualMinutes'>) {
+  const minutes = Number(task.actualMinutes)
+  return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : 0
+}
+
+export function taskRemainingMinutes(task: Pick<Task, 'estimatedMinutes' | 'progress'>) {
+  return Math.max(5, Math.round(task.estimatedMinutes * (100 - task.progress) / 100))
 }
 
 export const moodOptions: { value: Mood; emoji: string; label: string; short: string; score: number }[] = [
@@ -573,6 +582,7 @@ export function inboxItemToTask(item: GptInboxTaskItem): Task {
     priority: item.priority,
     progress: 0,
     estimatedMinutes: item.estimatedMinutes,
+    actualMinutes: 0,
     status: '未着手',
     memo: item.memo,
     createdAt: now,
