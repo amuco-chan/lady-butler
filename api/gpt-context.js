@@ -111,7 +111,7 @@ function contextFrom(envelope) {
 
   const moodAverage = moodLogs.length ? moodLogs.reduce((sum, item) => sum + (score[item.mood] || 3), 0) / moodLogs.length : null
   const guidance = moodAverage !== null && moodAverage <= 2
-    ? '最近の気分が低めです。緊急の提出・連絡を優先し、作業量は少なく提案してください。'
+    ? '最近の気分が低めです。緊急の提出・連絡を優先し、負荷は少なく提案してください。'
     : moodAverage !== null && moodAverage >= 4
       ? '最近は比較的余力があります。最優先の後に、一つだけ前倒しを提案できます。'
       : '締切・予定・気分を合わせて、無理のない量を提案してください。'
@@ -125,7 +125,7 @@ function contextFrom(envelope) {
     locale: 'ja-JP',
     profile: { name: text(settings.name) || 'レディ', tone: settings.tone || '執事', strictness: settings.strictness || '標準' },
     sharing: { tasksAndEvents: shareTasks, mood: shareMood, diary: shareDiary },
-    summary: { openTaskCount: tasks.length, upcomingEventCount: events.length, recentWorkLogCount: taskWorkLogs.length, recentMoodCount: moodLogs.length, recentDiaryCount: diaries.length },
+    summary: { openTaskCount: tasks.length, upcomingEventCount: events.length, recentFocusLogCount: taskWorkLogs.length, recentMoodCount: moodLogs.length, recentDiaryCount: diaries.length },
     tasks,
     taskWorkLogs,
     events,
