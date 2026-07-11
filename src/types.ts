@@ -21,6 +21,17 @@ export interface Task {
   updatedAt: string
 }
 
+export interface TaskWorkLog {
+  id: string
+  taskId: string
+  taskTitle: string
+  minutes: number
+  date: string
+  memo?: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface CalendarEvent {
   id: string
   title: string
