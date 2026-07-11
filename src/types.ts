@@ -14,6 +14,7 @@ export interface Task {
   priority: Priority
   progress: Progress
   estimatedMinutes: number
+  actualMinutes?: number
   status: Status
   memo: string
   createdAt: string
