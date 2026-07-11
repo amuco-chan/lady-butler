@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
-import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes } from '../src/lib.ts'
+import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, workLogMinutes } from '../src/lib.ts'
 
 async function callGptInbox(body, options = {}) {
   let responseBody = ''
@@ -98,6 +98,8 @@ assert.equal(importedTask.status, '未着手')
 assert.equal(taskActualMinutes(importedTask), 0)
 assert.equal(taskActualMinutes({ actualMinutes: 17.4 }), 17)
 assert.equal(taskRemainingMinutes({ estimatedMinutes: 90, progress: 50 }), 45)
+assert.equal(workLogMinutes({ minutes: 24.6 }), 25)
+assert.match(formatWorkLogTime('2026-07-12T09:30:00'), /9:30|09:30/)
 
 const gptEventItems = normalizeGptInboxPayload({
   sourceText: '明日15時から美容院なんだよね',
@@ -277,6 +279,7 @@ const savedAppData = await callAppData({
   baseRevision: 0,
   data: {
     tasks: [{ id: 'task-1', title: '同期テスト', memo: 'x'.repeat(900), actualMinutes: 25, updatedAt: '2026-07-03T00:00:00.000Z' }],
+    taskWorkLogs: [{ id: 'log-1', taskId: 'task-1', taskTitle: '同期テスト', minutes: 25, date: '2026-07-03', createdAt: '2026-07-03T01:00:00.000Z', updatedAt: '2026-07-03T01:00:00.000Z' }],
     events: [{ id: 'event-1', title: 'ゼミ', startAt: '2099-07-03T14:00', endAt: '2099-07-03T15:00' }],
     moodLogs: [{ id: 'mood-1', date: '2026-07-03', mood: 'tired', memo: '寝不足' }],
     diaries: [{ id: 'diary-1', date: '2026-07-03', mood: 'tired', doneToday: '資料を開いた', hardThings: '寝不足', carryOver: '見出し', freeMemo: 'y'.repeat(1200), aiComment: '' }],
@@ -290,11 +293,14 @@ assert.equal(savedAppData.body.revision, 1)
 const loadedAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(loadedAppData.body.exists, true)
 assert.equal(loadedAppData.body.data.tasks[0].title, '同期テスト')
+assert.equal(loadedAppData.body.data.taskWorkLogs[0].minutes, 25)
 
 const gptContext = await callGptContext({ headers: { authorization: 'Bearer gpt-action-test-token' } })
 assert.equal(gptContext.status, 200)
 assert.equal(gptContext.body.tasks[0].title, '同期テスト')
 assert.equal(gptContext.body.tasks[0].actualMinutes, 25)
+assert.equal(gptContext.body.taskWorkLogs[0].taskTitle, '同期テスト')
+assert.equal(gptContext.body.summary.recentWorkLogCount, 1)
 assert.equal(gptContext.body.events[0].title, 'ゼミ')
 assert.equal(gptContext.body.moodLogs[0].memo, '寝不足')
 assert.equal(gptContext.body.diaries[0].doneToday, '資料を開いた')
@@ -333,9 +339,10 @@ const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
-assert.equal(actionSchema.info.version, '2.3.0')
+assert.equal(actionSchema.info.version, '2.4.0')
 assert.equal(actionSchema.paths['/api/gpt-context'].get.operationId, 'getLadyButlerContext')
 assert.ok(actionSchema.paths['/api/gpt-context'].get.responses['200'].content['application/json'].schema.properties.currentLocalDateTime)
+assert.ok(actionSchema.paths['/api/gpt-context'].get.responses['200'].content['application/json'].schema.properties.taskWorkLogs)
 assert.equal(actionSchema.paths['/api/gpt-context'].get['x-openai-isConsequential'], false)
 assert.equal(actionSchema.paths['/api/gpt-inbox'].post['x-openai-isConsequential'], false)
 assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /real future tasks or events/)
