@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
-import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task } from './types'
-import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, toLocalDateTimeValue, useStoredState } from './lib'
+import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task, TaskWorkLog } from './types'
+import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, toLocalDateTimeValue, useStoredState, workLogMinutes } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -34,6 +34,7 @@ type AppBackup = {
   version?: number
   exportedAt?: string
   tasks?: Task[]
+  taskWorkLogs?: TaskWorkLog[]
   events?: CalendarEvent[]
   moodLogs?: MoodLog[]
   diaries?: DiaryEntry[]
@@ -61,6 +62,7 @@ const normalizeCloudData = (value: unknown): AppBackup => {
   return {
     version: 2,
     tasks: Array.isArray(data.tasks) ? data.tasks : [],
+    taskWorkLogs: Array.isArray(data.taskWorkLogs) ? data.taskWorkLogs : [],
     events: Array.isArray(data.events) ? data.events : [],
     moodLogs: Array.isArray(data.moodLogs) ? data.moodLogs : [],
     diaries: Array.isArray(data.diaries) ? data.diaries : [],
@@ -79,6 +81,7 @@ const sameEventCandidate = (event: CalendarEvent, item: Extract<GptInboxItem, { 
 export default function App() {
   const [page, setPage] = useState<Page>('home')
   const [tasks, setTasks] = useStoredState<Task[]>('lady.tasks', sampleTasks)
+  const [taskWorkLogs, setTaskWorkLogs] = useStoredState<TaskWorkLog[]>('lady.taskWorkLogs', [])
   const [events, setEvents] = useStoredState<CalendarEvent[]>('lady.events', [])
   const [moodLogs, setMoodLogs] = useStoredState<MoodLog[]>('lady.moods', [])
   const [diaries, setDiaries] = useStoredState<DiaryEntry[]>('lady.diaries', [])
@@ -99,7 +102,7 @@ export default function App() {
   const cloudRevision = useRef(0)
   const cloudReady = useRef(false)
   const cloudLastData = useRef('')
-  const cloudData = useMemo<AppBackup>(() => normalizeCloudData({ tasks, events, moodLogs, diaries, gptInbox, settings }), [tasks, events, moodLogs, diaries, gptInbox, settings])
+  const cloudData = useMemo<AppBackup>(() => normalizeCloudData({ tasks, taskWorkLogs, events, moodLogs, diaries, gptInbox, settings }), [tasks, taskWorkLogs, events, moodLogs, diaries, gptInbox, settings])
   const cloudDataJson = useMemo(() => JSON.stringify(cloudData), [cloudData])
   const cloudDataRef = useRef(cloudData)
   cloudDataRef.current = cloudData
@@ -140,16 +143,27 @@ export default function App() {
     return existing ? prev.map(log => log.date === date ? { ...log, mood, memo, updatedAt: now } : log) : [{ id: crypto.randomUUID(), date, mood, memo, createdAt: now, updatedAt: now }, ...prev]
   })
   const saveDiary = (entry: DiaryEntry) => setDiaries(prev => prev.some(item => item.date === entry.date) ? prev.map(item => item.date === entry.date ? entry : item) : [entry, ...prev])
-  const logTaskTime = (id: string, minutes: number) => setTasks(prev => prev.map(task => {
+  const logTaskTime = (id: string, minutes: number) => {
     const addMinutes = Math.max(0, Math.round(minutes))
-    if (task.id !== id || addMinutes <= 0) return task
-    return {
+    const target = tasks.find(task => task.id === id)
+    if (!target || addMinutes <= 0) return
+    const now = new Date()
+    setTasks(prev => prev.map(task => task.id === id ? {
       ...task,
       actualMinutes: taskActualMinutes(task) + addMinutes,
       status: task.status === '未着手' ? '進行中' : task.status,
-      updatedAt: new Date().toISOString(),
-    }
-  }))
+      updatedAt: now.toISOString(),
+    } : task))
+    setTaskWorkLogs(prev => [{
+      id: crypto.randomUUID(),
+      taskId: id,
+      taskTitle: target.title,
+      minutes: addMinutes,
+      date: localDate(now),
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    }, ...prev].slice(0, 1000))
+  }
   const acceptInboxItem = (item: GptInboxItem) => {
     const duplicate = item.type === 'event' ? events.some(event => sameEventCandidate(event, item)) : tasks.some(task => sameTaskCandidate(task, item))
     if (!duplicate) {
@@ -255,11 +269,12 @@ export default function App() {
       setSyncMessage('同期を確認できませんでした。リンク受信は引き続き利用できます。')
     }
   }, [ingestGptItems, syncToken])
-  const backup: AppBackup = { version: 1, tasks, events, moodLogs, diaries, gptInbox, settings }
+  const backup: AppBackup = { version: 1, tasks, taskWorkLogs, events, moodLogs, diaries, gptInbox, settings }
   const restoreBackup = (data: AppBackup) => {
     if (!data || typeof data !== 'object') throw new Error('バックアップの形式が読み取れません。')
     if (!confirm('バックアップを読み込みます。現在この端末にあるデータは上書きされます。よろしいですか？')) return false
     setTasks(Array.isArray(data.tasks) ? data.tasks : [])
+    setTaskWorkLogs(Array.isArray(data.taskWorkLogs) ? data.taskWorkLogs : [])
     setEvents(Array.isArray(data.events) ? data.events : [])
     setMoodLogs(Array.isArray(data.moodLogs) ? data.moodLogs : [])
     setDiaries(Array.isArray(data.diaries) ? data.diaries : [])
@@ -272,13 +287,14 @@ export default function App() {
     const data = normalizeCloudData(value)
     cloudLastData.current = JSON.stringify(data)
     setTasks(data.tasks ?? [])
+    setTaskWorkLogs(data.taskWorkLogs ?? [])
     setEvents(data.events ?? [])
     setMoodLogs(data.moodLogs ?? [])
     setDiaries(data.diaries ?? [])
     setGptInbox(data.gptInbox ?? [])
     setSettings(data.settings ?? defaultSettings)
     return data
-  }, [setDiaries, setEvents, setGptInbox, setMoodLogs, setSettings, setTasks])
+  }, [setDiaries, setEvents, setGptInbox, setMoodLogs, setSettings, setTaskWorkLogs, setTasks])
 
   const pullDeviceData = useCallback(async (silent = false) => {
     const token = syncToken.trim()
@@ -571,8 +587,8 @@ export default function App() {
       <header className="topbar"><button className="icon-button menu-button" type="button" aria-label="メニューを開く" title="メニューを開く" onClick={() => setMenu(true)}><Menu/></button><div className="breadcrumbs"><span>Lady's Butler</span><i>/</i><b>{nav.find(n => n.id === page)?.label}</b></div><div className="topbar-actions"><button className="gpt-launch" type="button" onClick={openCustomGpt} title="GPTを開いて話す"><Sparkles size={15}/><span>GPTで話す</span><ExternalLink size={12}/></button>{(page === 'home' || page === 'tasks' || page === 'calendar') && <button className="quick-add" type="button" onClick={() => { setReviewingInbox(null); page === 'calendar' ? setEditingEvent(blankEvent()) : setEditing(blankTask()) }}><Plus size={17}/>{page === 'calendar' ? '予定を追加' : 'やることを追加'}</button>}</div></header>
       <div className="page-wrap">
         {page === 'home' && <InstallPrompt/>}
-        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
-        {page === 'tasks' && <TasksPage tasks={tasks} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime}/>}
+        {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} taskWorkLogs={taskWorkLogs} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
+        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime}/>}
         {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
         {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage
@@ -618,7 +634,7 @@ function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; t
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
 }
 
-function HomePage({ name, settings, tasks, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; settings: Settings; tasks: Task[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
+function HomePage({ name, settings, tasks, taskWorkLogs, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; settings: Settings; tasks: Task[]; taskWorkLogs: TaskWorkLog[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
   const todayMood = moodLogs.find(log => log.date === localDate())?.mood
   const basePlan = dayPlan(tasks, todayMood)
   const calendarStart = new Date(); calendarStart.setHours(0, 0, 0, 0)
@@ -632,7 +648,7 @@ function HomePage({ name, settings, tasks, events, moodLogs, gptInbox, importNot
   const plan = { ...basePlan, today: basePlan.today.slice(0, taskLimit), extra: [...basePlan.today.slice(taskLimit), ...basePlan.extra] }
   const deferredBySchedule = Math.max(0, basePlan.today.length - plan.today.length)
   const workMinutes = plan.today.reduce((n,t) => n + taskRemainingMinutes(t), 0)
-  const loggedMinutes = plan.today.reduce((n,t) => n + taskActualMinutes(t), 0)
+  const todayLoggedMinutes = taskWorkLogs.filter(log => log.date === localDate()).reduce((sum, log) => sum + workLogMinutes(log), 0)
   const nextEvent = todayEvents.find(event => new Date(event.endAt).getTime() >= Date.now() - 60 * 60 * 1000) ?? upcomingEvents[0]
   const moodLabel = todayMood ? `${moodInfo(todayMood)?.emoji ?? ''} ${moodInfo(todayMood)?.label ?? ''}` : '未記録'
   const loadLabel = scheduleLoad === 'heavy' ? '詰め込み禁止' : scheduleLoad === 'medium' ? '軽め運転' : '余白あり'
@@ -668,7 +684,7 @@ function HomePage({ name, settings, tasks, events, moodLogs, gptInbox, importNot
       const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0 || (item.type === 'event' && item.startIsFallback)
       return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {item.startIsFallback ? '開始日時未設定' : `${eventTime?.label} ${eventTime?.date} ${eventTime?.time}`}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {item.deadlineIsFallback ? '締切未設定' : `${taskDeadline?.label} ${taskDeadline?.date}`} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => needsCheck ? reviewInboxItem(item) : acceptInboxItem(item)}>{needsCheck ? <Edit3 size={14}/> : <Plus size={14}/>} {needsCheck ? '確認して追加' : item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
     })}</div> : <p className="inbox-empty">確認が必要なものはありません。</p>}</section>}
-    <section className="card command-card"><div className="section-title"><div><span>TODAY'S PLAN</span><h2>今日のご案内</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>記録済み {loggedMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TODO</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのやることはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
+    <section className="card command-card"><div className="section-title"><div><span>TODAY'S PLAN</span><h2>今日のご案内</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>作業目安 {workMinutes}分</b><b>今日の実績 {todayLoggedMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TODO</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのやることはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
     <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
   </>
 }
@@ -703,18 +719,22 @@ function WeekPlanCard({ mode, advice, tasks, events, minutes, lowMoodDays, go }:
   </section>
 }
 
-function TasksPage({ tasks, edit, remove, complete, logTime }: { tasks: Task[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void }) {
+function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void }) {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('未完了'), [sort, setSort] = useState('締切が近い順')
   let shown = tasks.filter(t => t.title.includes(query) && (filter === 'すべて' || filter === '未完了' ? filter === 'すべて' || t.status !== '完了' : t.status === filter))
   shown = [...shown].sort(sort === '優先度順' ? (a,b) => ({高:3,中:2,低:1}[b.priority]-{高:3,中:2,低:1}[a.priority]) : (a,b) => +new Date(a.deadline)-+new Date(b.deadline))
   const openCount = tasks.filter(t => t.status !== '完了').length
   const loggedTotal = tasks.reduce((sum, task) => sum + taskActualMinutes(task), 0)
-  return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了のやることがあります。取り組んだ時間は合計{loggedTotal}分です。</></PageHeading>
+  const todayLogged = taskWorkLogs.filter(log => log.date === localDate()).reduce((sum, log) => sum + workLogMinutes(log), 0)
+  const recentLogs = [...taskWorkLogs].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8)
+  const taskTitle = (log: TaskWorkLog) => tasks.find(task => task.id === log.taskId)?.title || log.taskTitle || '削除済みのやること'
+  return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了のやることがあります。今日の作業は{todayLogged}分、合計{loggedTotal}分です。</></PageHeading>
     <div className="toolbar"><label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="やることを検索"/></label><div className="segmented">{['未完了','すべて','進行中','完了'].map(v => <button className={filter === v ? 'active' : ''} onClick={() => setFilter(v)} key={v}>{v}</button>)}</div><label className="select-wrap"><select value={sort} onChange={e => setSort(e.target.value)}><option>締切が近い順</option><option>優先度順</option></select><ChevronDown size={15}/></label></div>
     <section className="card task-table"><div className="table-head"><span>やること</span><span>締切</span><span>進捗・時間</span><span>優先度</span><span>状態</span><span>記録</span></div>{shown.map(t => {
       const actual = taskActualMinutes(t)
       return <div className="table-row" key={t.id}><div className="task-title-cell"><button className={`check ${t.status === '完了' ? 'done' : ''}`} type="button" aria-label={`「${t.title}」を${t.status === '完了' ? '未完了に戻す' : '完了にする'}`} title={t.status === '完了' ? '未完了に戻す' : '完了にする'} onClick={() => complete(t.id)}>{t.status === '完了' ? <Check size={16}/> : <Circle size={21}/>}</button><div><strong>{t.title}</strong><span>{taskCategoryLabel(t.category)}{t.memo ? ` ・ ${t.memo}` : ''}</span></div></div><div><b className={formatDeadline(t.deadline).urgent ? 'urgent-text' : ''}>{formatDeadline(t.deadline).label}</b><span>{formatDeadline(t.deadline).date}</span></div><div className="inline-progress task-progress-time"><span>{t.progress}%</span><div><i style={{width:`${t.progress}%`}}/></div><small>実績 {actual}分 / 目安 {t.estimatedMinutes}分</small></div><div><span className={`badge priority-${t.priority}`}>{t.priority}</span></div><div><span className={`status status-${t.status}`}>{t.status}</span></div><div className="row-actions time-log-actions"><button className="time-chip" type="button" onClick={() => logTime(t.id, 10)} title="10分記録" aria-label={`「${t.title}」に10分記録`}>+10分</button><button className="time-chip" type="button" onClick={() => logTime(t.id, 25)} title="25分記録" aria-label={`「${t.title}」に25分記録`}>+25分</button><button type="button" onClick={() => edit(t)} title="編集" aria-label={`「${t.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={() => remove(t.id)} title="削除" aria-label={`「${t.title}」を削除`}><Trash2 size={16}/></button></div></div>
     })}{!shown.length && <Empty text="条件に合うやることはありません"/>}</section>
+    <section className="card work-log-card"><div className="section-title"><div><span>WORK LOG</span><h2>最近の作業記録</h2></div><small>今日 {todayLogged}分</small></div>{recentLogs.length ? <div className="work-log-list">{recentLogs.map(log => <article key={log.id}><div><strong>{workLogMinutes(log)}分</strong><span>{formatWorkLogTime(log.createdAt)}</span></div><p>{taskTitle(log)}</p></article>)}</div> : <div className="work-log-empty"><Clock3 size={18}/><p>+10分、+25分を押すと、ここに履歴が残ります。</p></div>}</section>
   </>
 }
 
@@ -829,13 +849,14 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
   const dataForBackup: AppBackup = { ...backup, settings: effectiveSettings }
   const counts = [
     ['やること', backup.tasks?.length ?? 0],
+    ['作業記録', backup.taskWorkLogs?.length ?? 0],
     ['予定', backup.events?.length ?? 0],
     ['気分ログ', backup.moodLogs?.length ?? 0],
     ['日記', backup.diaries?.length ?? 0],
     ['GPT確認待ち', backup.gptInbox?.length ?? 0],
   ] as const
   const dataSize = Math.ceil(new Blob([JSON.stringify(dataForBackup)]).size / 1024)
-  const activityTimes = [...(backup.tasks ?? []), ...(backup.events ?? []), ...(backup.moodLogs ?? []), ...(backup.diaries ?? []), ...(backup.gptInbox ?? [])]
+  const activityTimes = [...(backup.tasks ?? []), ...(backup.taskWorkLogs ?? []), ...(backup.events ?? []), ...(backup.moodLogs ?? []), ...(backup.diaries ?? []), ...(backup.gptInbox ?? [])]
     .map(item => new Date('updatedAt' in item ? item.updatedAt || item.createdAt : item.createdAt).getTime())
     .filter(time => !Number.isNaN(time))
   const lastActivity = activityTimes.length ? new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(new Date(Math.max(...activityTimes))) : 'まだなし'
