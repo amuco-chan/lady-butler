@@ -78,6 +78,7 @@ function normalizeData(value) {
   return {
     version: 2,
     tasks: list('tasks', 1000),
+    taskWorkLogs: list('taskWorkLogs', 1000),
     events: list('events', 1000),
     moodLogs: list('moodLogs', 1000),
     diaries: list('diaries', 1000),
