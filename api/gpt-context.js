@@ -90,7 +90,7 @@ function contextFrom(envelope) {
       const right = new Date(b.deadline || '9999-12-31').getTime()
       return left - right
     }).slice(0, 30)
-    .map(task => ({ id: shortText(task.id, 100), title: shortText(task.title, 120), deadline: shortText(task.deadline, 30) || null, category: shortText(task.category, 30), priority: shortText(task.priority, 10), progress: task.progress, estimatedMinutes: task.estimatedMinutes, status: shortText(task.status, 20), memo: shortText(task.memo, 500) })) : []
+    .map(task => ({ id: shortText(task.id, 100), title: shortText(task.title, 120), deadline: shortText(task.deadline, 30) || null, category: shortText(task.category, 30), priority: shortText(task.priority, 10), progress: task.progress, estimatedMinutes: task.estimatedMinutes, actualMinutes: Number(task.actualMinutes) || 0, status: shortText(task.status, 20), memo: shortText(task.memo, 500) })) : []
 
   const events = shareTasks ? list(data.events)
     .filter(event => event.recurrence && event.recurrence !== 'none' || new Date(event.endAt || event.startAt).getTime() >= now.getTime() - 3600000)
