@@ -44,7 +44,7 @@
                     },
                     "taskWorkLogs": {
                       "type": "array",
-                      "description": "Recent focus sessions for tasks. Each item includes taskId, taskTitle, minutes, date, and createdAt.",
+                      "description": "Recent focus sessions. Items may be linked to a task, or may use taskTitle '集中のみ' when the user logged focus without choosing a task. Each item includes taskId, taskTitle, minutes, date, and createdAt.",
                       "items": { "type": "object", "additionalProperties": true }
                     },
                     "events": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
