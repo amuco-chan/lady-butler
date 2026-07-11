@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { CalendarEvent, Category, DiaryEntry, EventRecurrence, GptInboxEventItem, GptInboxItem, GptInboxTaskItem, Mood, MoodLog, Priority, Settings, Task } from './types'
+import type { CalendarEvent, Category, DiaryEntry, EventRecurrence, GptInboxEventItem, GptInboxItem, GptInboxTaskItem, Mood, MoodLog, Priority, Settings, Task, TaskWorkLog } from './types'
 
 const todayAt = (hour: number, addDays = 0) => {
   const date = new Date()
@@ -49,6 +49,17 @@ export function taskActualMinutes(task: Pick<Task, 'actualMinutes'>) {
 
 export function taskRemainingMinutes(task: Pick<Task, 'estimatedMinutes' | 'progress'>) {
   return Math.max(5, Math.round(task.estimatedMinutes * (100 - task.progress) / 100))
+}
+
+export function workLogMinutes(log: Pick<TaskWorkLog, 'minutes'>) {
+  const minutes = Number(log.minutes)
+  return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : 0
+}
+
+export function formatWorkLogTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '時刻未記録'
+  return new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
 }
 
 export const moodOptions: { value: Mood; emoji: string; label: string; short: string; score: number }[] = [
