@@ -84,13 +84,13 @@ function contextFrom(envelope) {
   const currentLocalDateTime = `${today}T${local.hour}:${local.minute}`
 
   const tasks = shareTasks ? list(data.tasks)
-    .filter(task => task.status !== '完了')
+    .filter(task => task.taskType === 'daily' ? task.lastCompletedDate !== today : task.status !== '完了')
     .sort((a, b) => {
       const left = new Date(a.deadline || '9999-12-31').getTime()
       const right = new Date(b.deadline || '9999-12-31').getTime()
       return left - right
     }).slice(0, 30)
-    .map(task => ({ id: shortText(task.id, 100), title: shortText(task.title, 120), deadline: shortText(task.deadline, 30) || null, category: shortText(task.category, 30), priority: shortText(task.priority, 10), progress: task.progress, estimatedMinutes: task.estimatedMinutes, actualMinutes: Number(task.actualMinutes) || 0, status: shortText(task.status, 20), memo: shortText(task.memo, 500) })) : []
+    .map(task => ({ id: shortText(task.id, 100), title: shortText(task.title, 120), deadline: shortText(task.deadline, 30) || null, category: shortText(task.category, 30), priority: shortText(task.priority, 10), progress: task.taskType === 'daily' && task.lastCompletedDate !== today ? 0 : task.progress, estimatedMinutes: task.estimatedMinutes, actualMinutes: Number(task.actualMinutes) || 0, taskType: task.taskType === 'daily' ? 'daily' : 'temporary', lastCompletedDate: shortText(task.lastCompletedDate, 20) || null, status: task.taskType === 'daily' && task.lastCompletedDate !== today ? '未着手' : shortText(task.status, 20), memo: shortText(task.memo, 500) })) : []
 
   const events = shareTasks ? list(data.events)
     .filter(event => event.recurrence && event.recurrence !== 'none' || new Date(event.endAt || event.startAt).getTime() >= now.getTime() - 3600000)
@@ -99,7 +99,7 @@ function contextFrom(envelope) {
 
   const taskWorkLogs = shareTasks ? list(data.taskWorkLogs)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 20)
-    .map(log => ({ id: shortText(log.id, 100), taskId: shortText(log.taskId, 100), taskTitle: shortText(log.taskTitle, 120), minutes: Number(log.minutes) || 0, date: shortText(log.date, 20), createdAt: shortText(log.createdAt, 40) })) : []
+    .map(log => ({ id: shortText(log.id, 100), taskId: shortText(log.taskId, 100), taskTitle: shortText(log.taskTitle, 120), minutes: Number(log.minutes) || 0, date: shortText(log.date, 20), memo: shortText(log.memo, 120), startedAt: shortText(log.startedAt, 40) || null, endedAt: shortText(log.endedAt, 40) || null, createdAt: shortText(log.createdAt, 40) })) : []
 
   const moodLogs = shareMood ? list(data.moodLogs)
     .sort((a, b) => text(b.date).localeCompare(text(a.date))).slice(0, 7)
