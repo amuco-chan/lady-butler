@@ -39,12 +39,12 @@
                     "summary": { "type": "object", "additionalProperties": true },
                     "tasks": {
                       "type": "array",
-                      "description": "Current tasks. actualMinutes means the total focused minutes the user has logged for that task.",
+                      "description": "Current tasks. taskType is either daily for recurring daily tasks or temporary for one-off tasks. Daily tasks are complete for today only when lastCompletedDate equals today. actualMinutes means the total focused minutes the user has logged for that task.",
                       "items": { "type": "object", "additionalProperties": true }
                     },
                     "taskWorkLogs": {
                       "type": "array",
-                      "description": "Recent focus sessions. Items may be linked to a task, or may use taskTitle '集中のみ' when the user logged focus without choosing a task. Each item includes taskId, taskTitle, minutes, date, and createdAt.",
+                      "description": "Recent focus sessions. Items may be linked to a task, or may use taskTitle '集中のみ' when the user logged focus without choosing a task. Each item includes taskId, taskTitle, minutes, date, memo, createdAt, and may include startedAt and endedAt when measured by the timer.",
                       "items": { "type": "object", "additionalProperties": true }
                     },
                     "events": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
@@ -134,6 +134,11 @@
                           "minimum": 5,
                           "maximum": 720,
                           "description": "Rough effort estimate in minutes."
+                        },
+                        "taskType": {
+                          "type": "string",
+                          "enum": ["temporary", "daily"],
+                          "description": "Task only. Use daily only for habits or things explicitly meant to repeat every day. Use temporary for one-off tasks."
                         },
                         "memo": {
                           "type": "string",
