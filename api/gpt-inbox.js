@@ -87,6 +87,7 @@ function normalizeTask(raw, sourceText) {
   const deadlineInvalid = !!rawDeadline && !deadline
   const deadlineIsFallback = !deadline
   const ambiguities = [...new Set([...textList(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineInvalid ? ['締切の日時形式を確認'] : [])])].slice(0, 5)
+  const rawTaskType = text(raw.taskType || raw.task_type || raw.repeat || raw.routine).toLowerCase()
   return {
     type: 'task',
     title,
@@ -94,6 +95,7 @@ function normalizeTask(raw, sourceText) {
     category: normalizeCategory(raw.category, title),
     priority: allowedPriorities.has(priority) ? priority : '中',
     estimatedMinutes: number(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes, 60),
+    taskType: ['daily', 'everyday', 'every_day', '毎日', '日課'].includes(rawTaskType) ? 'daily' : 'temporary',
     memo: shortText(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いたやること候補',
     sourceText: shortText(raw.sourceText || raw.source_text) || sourceText,
     confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : deadlineIsFallback ? 'medium' : 'high',
