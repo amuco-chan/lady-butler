@@ -33,12 +33,30 @@ export const priorityWeight = { 高: 3, 中: 2, 低: 1 } as const
 export const categories: Exclude<Category, '予定'>[] = ['課題', '授業', '生活', 'バイト', '買い物', 'その他']
 export const priorities: Priority[] = ['高', '中', '低']
 
+export function taskKind(task: Pick<Task, 'taskType'>): 'daily' | 'temporary' {
+  return task.taskType === 'daily' ? 'daily' : 'temporary'
+}
+
+export function taskDisplayStatus(task: Pick<Task, 'taskType' | 'lastCompletedDate' | 'status'>, date = localDate()) {
+  if (taskKind(task) === 'daily') return task.lastCompletedDate === date ? '完了' : task.status === '保留' ? '保留' : '未着手'
+  return task.status
+}
+
+export function isTaskOpenToday(task: Pick<Task, 'taskType' | 'lastCompletedDate' | 'status'>, date = localDate()) {
+  return taskDisplayStatus(task, date) !== '完了'
+}
+
+export function taskProgressToday(task: Pick<Task, 'progress'> & Partial<Pick<Task, 'taskType' | 'lastCompletedDate'>>, date = localDate()) {
+  return taskKind(task) === 'daily' && task.lastCompletedDate !== date ? 0 : task.progress
+}
+
 export function rankedTasks(tasks: Task[]) {
-  return tasks.filter(t => t.status !== '完了').sort((a, b) => {
+  return tasks.filter(t => isTaskOpenToday(t)).sort((a, b) => {
     const parsedA = new Date(a.deadline).getTime(), parsedB = new Date(b.deadline).getTime()
     const urgencyA = Number.isFinite(parsedA) ? Math.max(0, 7 - (parsedA - Date.now()) / 86400000) : 0
     const urgencyB = Number.isFinite(parsedB) ? Math.max(0, 7 - (parsedB - Date.now()) / 86400000) : 0
-    return (urgencyB + priorityWeight[b.priority] * 2 + (100 - b.progress) / 50) - (urgencyA + priorityWeight[a.priority] * 2 + (100 - a.progress) / 50)
+    const dailyA = taskKind(a) === 'daily' ? 0.8 : 0, dailyB = taskKind(b) === 'daily' ? 0.8 : 0
+    return (dailyB + urgencyB + priorityWeight[b.priority] * 2 + (100 - taskProgressToday(b)) / 50) - (dailyA + urgencyA + priorityWeight[a.priority] * 2 + (100 - taskProgressToday(a)) / 50)
   })
 }
 
@@ -47,8 +65,8 @@ export function taskActualMinutes(task: Pick<Task, 'actualMinutes'>) {
   return Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : 0
 }
 
-export function taskRemainingMinutes(task: Pick<Task, 'estimatedMinutes' | 'progress'>) {
-  return Math.max(5, Math.round(task.estimatedMinutes * (100 - task.progress) / 100))
+export function taskRemainingMinutes(task: Pick<Task, 'estimatedMinutes' | 'progress'> & Partial<Pick<Task, 'taskType' | 'lastCompletedDate'>>) {
+  return Math.max(5, Math.round(task.estimatedMinutes * (100 - taskProgressToday(task)) / 100))
 }
 
 export function workLogMinutes(log: Pick<TaskWorkLog, 'minutes'>) {
@@ -495,6 +513,8 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
   const deadlineIsFallback = Boolean(raw.deadlineIsFallback) || !validDeadline
   const deadlineInvalid = hasDeadline && !validDeadline
   const ambiguities = [...new Set([...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation), ...(deadlineInvalid ? ['締切の日時形式を確認'] : [])])].slice(0, 5)
+  const rawTaskType = textOf(raw.taskType || raw.task_type || raw.repeat || raw.routine).toLowerCase()
+  const taskType = ['daily', 'everyday', 'every_day', '毎日', '日課'].includes(rawTaskType) ? 'daily' : 'temporary'
   return [{
     id: textOf(raw.id) || crypto.randomUUID(),
     type: 'task',
@@ -503,6 +523,7 @@ function normalizeGptTask(raw: Record<string, unknown>, sourceText: string, now:
     category: normalizeCategory(raw.category, title),
     priority: normalizePriority(raw.priority),
     estimatedMinutes: normalizeEstimatedMinutes(raw.estimatedMinutes || raw.estimated_minutes || raw.minutes),
+    taskType,
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いたやること候補'),
     sourceText: itemSource,
     createdAt: textOf(raw.createdAt || raw.created_at) || now,
@@ -594,6 +615,8 @@ export function inboxItemToTask(item: GptInboxTaskItem): Task {
     progress: 0,
     estimatedMinutes: item.estimatedMinutes,
     actualMinutes: 0,
+    taskType: item.taskType === 'daily' ? 'daily' : 'temporary',
+    lastCompletedDate: '',
     status: '未着手',
     memo: item.memo,
     createdAt: now,
