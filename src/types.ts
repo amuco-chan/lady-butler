@@ -2,6 +2,7 @@ export type Category = '課題' | '授業' | '生活' | 'バイト' | '予定' |
 export type Priority = '高' | '中' | '低'
 export type Status = '未着手' | '進行中' | '完了' | '保留'
 export type Progress = 0 | 25 | 50 | 75 | 100
+export type TaskType = 'daily' | 'temporary'
 export type Page = 'home' | 'tasks' | 'calendar' | 'diary' | 'settings'
 export type Mood = 'very_good' | 'good' | 'normal' | 'tired' | 'exhausted'
 export type EventRecurrence = 'none' | 'daily' | 'weekly' | 'monthly'
@@ -15,6 +16,8 @@ export interface Task {
   progress: Progress
   estimatedMinutes: number
   actualMinutes?: number
+  taskType?: TaskType
+  lastCompletedDate?: string
   status: Status
   memo: string
   createdAt: string
@@ -28,6 +31,8 @@ export interface TaskWorkLog {
   minutes: number
   date: string
   memo?: string
+  startedAt?: string
+  endedAt?: string
   createdAt: string
   updatedAt: string
 }
@@ -90,6 +95,7 @@ export interface GptInboxTaskItem {
   category: Category
   priority: Priority
   estimatedMinutes: number
+  taskType?: TaskType
   memo: string
   sourceText: string
   createdAt: string
