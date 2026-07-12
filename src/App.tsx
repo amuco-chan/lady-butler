@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
-import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task, TaskWorkLog } from './types'
-import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, toLocalDateTimeValue, useStoredState, workLogMinutes } from './lib'
+import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task, TaskType, TaskWorkLog } from './types'
+import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, isTaskOpenToday, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskActualMinutes, taskDisplayStatus, taskKind, taskLimitForSchedule, taskProgressToday, taskRemainingMinutes, toLocalDateTimeValue, useStoredState, workLogMinutes } from './lib'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -12,7 +12,7 @@ const nav: { id: Page; label: string; icon: typeof Home }[] = [
 const CUSTOM_GPT_URL = 'https://chatgpt.com/g/g-6a3b5f4a64888191952893ff05fb7a29'
 const openCustomGpt = () => window.open(CUSTOM_GPT_URL, '_blank', 'noopener,noreferrer')
 
-const blankTask = (): Task => ({ id: crypto.randomUUID(), title: '', deadline: toLocalDateTimeValue(new Date(Date.now() + 86400000)), category: '課題', priority: '中', progress: 0, estimatedMinutes: 60, actualMinutes: 0, status: '未着手', memo: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
+const blankTask = (): Task => ({ id: crypto.randomUUID(), title: '', deadline: toLocalDateTimeValue(new Date(Date.now() + 86400000)), category: '課題', priority: '中', progress: 0, estimatedMinutes: 60, actualMinutes: 0, taskType: 'temporary', lastCompletedDate: '', status: '未着手', memo: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() })
 const blankEvent = (): CalendarEvent => {
   const start = new Date(Date.now() + 86400000)
   start.setHours(10, 0, 0, 0)
@@ -29,6 +29,8 @@ const eventDurationMinutes = (event: Pick<CalendarEvent, 'startAt' | 'endAt'>) =
 
 const taskCategoryOptions: Exclude<Task['category'], '予定'>[] = ['課題', '授業', '生活', 'バイト', '買い物', 'その他']
 const taskCategoryLabel = (category: Task['category']) => category === '予定' ? '生活' : category
+const taskTypeLabel = (task: Pick<Task, 'taskType'>) => taskKind(task) === 'daily' ? '毎日' : '臨時'
+const taskTypeOptions: { value: TaskType; label: string }[] = [{ value: 'temporary', label: '臨時タスク' }, { value: 'daily', label: '毎日タスク' }]
 
 type AppBackup = {
   version?: number
@@ -111,13 +113,14 @@ export default function App() {
     const end = new Date(start); end.setHours(23, 59, 59, 999)
     return expandRecurringEvents(events, start, end).length
   }, [events])
-  const openTaskCount = useMemo(() => tasks.filter(task => task.status !== '完了').length, [tasks])
+  const openTaskCount = useMemo(() => tasks.filter(task => isTaskOpenToday(task)).length, [tasks])
   const changePage = (p: Page) => { setPage(p); setMenu(false) }
   const saveTask = (task: Task) => {
-    setTasks(prev => prev.some(t => t.id === task.id) ? prev.map(t => t.id === task.id ? { ...task, updatedAt: new Date().toISOString() } : t) : [...prev, task])
+    const cleanTask = { ...task, taskType: taskKind(task), lastCompletedDate: taskKind(task) === 'daily' ? task.lastCompletedDate || '' : '', actualMinutes: taskActualMinutes(task) }
+    setTasks(prev => prev.some(t => t.id === cleanTask.id) ? prev.map(t => t.id === cleanTask.id ? { ...cleanTask, updatedAt: new Date().toISOString() } : t) : [...prev, cleanTask])
     if (reviewingInbox?.type === 'task') {
       setGptInbox(prev => prev.filter(item => item.id !== reviewingInbox.id))
-      setImportNotice(`「${task.title}」を確認して、やることに追加しました。`)
+      setImportNotice(`「${cleanTask.title}」を確認して、やることに追加しました。`)
       setReviewingInbox(null)
     }
     setEditing(null)
@@ -137,7 +140,15 @@ export default function App() {
     const fresh = incoming.filter(event => !signatures.has(`${event.title}|${event.startAt}|${event.endAt}`))
     return fresh.length ? [...prev, ...fresh] : prev
   })
-  const complete = (id: string) => setTasks(prev => prev.map(t => t.id === id ? { ...t, progress: t.status === '完了' ? 0 : 100, status: t.status === '完了' ? '未着手' : '完了', updatedAt: new Date().toISOString() } : t))
+  const complete = (id: string) => setTasks(prev => prev.map(t => {
+    if (t.id !== id) return t
+    const now = new Date().toISOString()
+    if (taskKind(t) === 'daily') {
+      const doneToday = t.lastCompletedDate === localDate()
+      return { ...t, lastCompletedDate: doneToday ? '' : localDate(), progress: doneToday ? 0 : 100, status: doneToday ? '未着手' : '完了', updatedAt: now }
+    }
+    return { ...t, progress: t.status === '完了' ? 0 : 100, status: t.status === '完了' ? '未着手' : '完了', updatedAt: now }
+  }))
   const saveMood = (mood: Mood, memo: string, date = localDate()) => setMoodLogs(prev => {
     const existing = prev.find(log => log.date === date), now = new Date().toISOString()
     return existing ? prev.map(log => log.date === date ? { ...log, mood, memo, updatedAt: now } : log) : [{ id: crypto.randomUUID(), date, mood, memo, createdAt: now, updatedAt: now }, ...prev]
@@ -164,7 +175,7 @@ export default function App() {
       updatedAt: now.toISOString(),
     }, ...prev].slice(0, 1000))
   }
-  const logFocusTime = (minutes: number) => {
+  const logFocusTime = (minutes: number, details: Pick<TaskWorkLog, 'memo' | 'startedAt' | 'endedAt'> = {}) => {
     const addMinutes = Math.max(0, Math.round(minutes))
     if (addMinutes <= 0) return
     const now = new Date()
@@ -175,6 +186,7 @@ export default function App() {
       minutes: addMinutes,
       date: localDate(now),
       memo: 'タスク指定なし',
+      ...details,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     }, ...prev].slice(0, 1000))
@@ -578,7 +590,7 @@ export default function App() {
       const current = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
       const key = `lady.reminder.sent.${localDate(now)}.${reminderTime}`
       if (current !== reminderTime || localStorage.getItem(key)) return
-      const openTasks = tasks.filter(task => task.status !== '完了').length
+      const openTasks = tasks.filter(task => isTaskOpenToday(task)).length
       const dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0)
       const dayEnd = new Date(now); dayEnd.setHours(23, 59, 59, 999)
       const todayEvents = expandRecurringEvents(events, dayStart, dayEnd).length
@@ -593,7 +605,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className={`sidebar ${menu ? 'open' : ''}`}>
       <div className="brand"><div className="crest">L</div><div><strong>Lady's Butler</strong><span>Personal assistant</span></div><button className="icon-button mobile-close" type="button" aria-label="メニューを閉じる" title="メニューを閉じる" onClick={() => setMenu(false)}><X size={20}/></button></div>
-      <nav>{nav.map(item => <button key={item.id} title={item.label} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
+      <nav>{nav.map(item => <button key={item.id} title={item.label} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && <em>{openTaskCount}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
       <div className="sidebar-quote"><Sparkles size={16}/><p>完璧でなくて構いません。<br/>まず提出できる形に。</p></div>
       <div className="profile-mini"><div className="avatar">L</div><div><strong>{settings.name || 'レディ'}</strong><span>本日もお供します</span></div></div>
     </aside>
@@ -615,7 +627,7 @@ export default function App() {
         />}
       </div>
     </main>
-    <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && tasks.filter(t => t.status !== '完了').length > 0 && <em>{tasks.filter(t => t.status !== '完了').length}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
+    <nav className="mobile-tabbar" aria-label="スマートフォン用メニュー">{nav.map(item => <button key={item.id} data-page={item.id} className={page === item.id ? 'active' : ''} onClick={() => changePage(item.id)}><item.icon size={19}/><span>{item.label}</span>{item.id === 'home' && gptInbox.length > 0 && <em className="inbox-count">{gptInbox.length}</em>}{item.id === 'tasks' && openTaskCount > 0 && <em>{openTaskCount}</em>}{item.id === 'calendar' && todayEventCount > 0 && <em>{todayEventCount}</em>}</button>)}</nav>
     {editing && <TaskModal task={editing} save={saveTask} close={() => { setEditing(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'task' ? reviewingInbox.ambiguities : undefined}/>}
     {editingEvent && <EventModal event={editingEvent} save={saveEvent} close={() => { setEditingEvent(null); setReviewingInbox(null) }} notice={reviewingInbox?.type === 'event' ? reviewingInbox.ambiguities : undefined}/>}
   </div>
@@ -734,23 +746,52 @@ function WeekPlanCard({ mode, advice, tasks, events, minutes, lowMoodDays, go }:
   </section>
 }
 
-function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime, logFocus }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number) => void }) {
+function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime, logFocus }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number, details?: Pick<TaskWorkLog, 'memo' | 'startedAt' | 'endedAt'>) => void }) {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('未完了'), [sort, setSort] = useState('締切が近い順')
-  let shown = tasks.filter(t => t.title.includes(query) && (filter === 'すべて' || filter === '未完了' ? filter === 'すべて' || t.status !== '完了' : t.status === filter))
-  shown = [...shown].sort(sort === '優先度順' ? (a,b) => ({高:3,中:2,低:1}[b.priority]-{高:3,中:2,低:1}[a.priority]) : (a,b) => +new Date(a.deadline)-+new Date(b.deadline))
-  const openCount = tasks.filter(t => t.status !== '完了').length
+  const [typeFilter, setTypeFilter] = useState<'すべて' | '毎日' | '臨時'>('すべて')
+  const [focusMinutes, setFocusMinutes] = useState('5'), [timerStartedAt, setTimerStartedAt] = useState<number | null>(null), [nowTick, setNowTick] = useState(Date.now())
+  useEffect(() => {
+    if (!timerStartedAt) return
+    setNowTick(Date.now())
+    const timer = window.setInterval(() => setNowTick(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [timerStartedAt])
+  const openCount = tasks.filter(t => isTaskOpenToday(t)).length
+  const dailyOpen = tasks.filter(t => taskKind(t) === 'daily' && isTaskOpenToday(t)).length
+  const temporaryOpen = tasks.filter(t => taskKind(t) === 'temporary' && isTaskOpenToday(t)).length
   const loggedTotal = taskWorkLogs.reduce((sum, log) => sum + workLogMinutes(log), 0)
   const todayLogged = taskWorkLogs.filter(log => log.date === localDate()).reduce((sum, log) => sum + workLogMinutes(log), 0)
   const recentLogs = [...taskWorkLogs].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 8)
-  const taskTitle = (log: TaskWorkLog) => log.taskId === 'focus-only' ? '集中のみ' : tasks.find(task => task.id === log.taskId)?.title || log.taskTitle || '削除済みのやること'
-  return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了のやることがあります。今日の集中は{todayLogged}分、合計{loggedTotal}分です。</></PageHeading>
-    <section className="card focus-quick-card"><div><span>QUICK FOCUS</span><h2>集中だけ記録</h2><p>タスクを選ばずに、今できた集中時間だけ残せます。</p></div><div className="focus-quick-actions"><button className="time-chip" type="button" onClick={() => logFocus(10)} title="10分集中を記録" aria-label="タスクを指定せずに10分集中を記録">+10分</button><button className="time-chip" type="button" onClick={() => logFocus(25)} title="25分集中を記録" aria-label="タスクを指定せずに25分集中を記録">+25分</button><small>今日の集中 {todayLogged}分</small></div></section>
+  const taskTitle = (log: TaskWorkLog) => `${log.taskId === 'focus-only' ? '集中のみ' : tasks.find(task => task.id === log.taskId)?.title || log.taskTitle || '削除済みのやること'}${log.memo ? ` ・ ${log.memo}` : ''}`
+  const elapsedSeconds = timerStartedAt ? Math.max(0, Math.floor((nowTick - timerStartedAt) / 1000)) : 0
+  const timerLabel = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:${String(elapsedSeconds % 60).padStart(2, '0')}`
+  const recordManualFocus = () => {
+    const minutes = Math.max(1, Math.round(Number(focusMinutes)))
+    if (Number.isFinite(minutes)) logFocus(minutes, { memo: '手入力' })
+  }
+  const stopFocusTimer = () => {
+    if (!timerStartedAt) return
+    const endedAt = new Date(), minutes = Math.max(1, Math.round((endedAt.getTime() - timerStartedAt) / 60000))
+    logFocus(minutes, { memo: '計測', startedAt: new Date(timerStartedAt).toISOString(), endedAt: endedAt.toISOString() })
+    setTimerStartedAt(null)
+  }
+  let shown = tasks.filter(t => {
+    const status = taskDisplayStatus(t)
+    const matchesStatus = filter === 'すべて' || (filter === '未完了' ? status !== '完了' : status === filter)
+    const matchesType = typeFilter === 'すべて' || (typeFilter === '毎日' ? taskKind(t) === 'daily' : taskKind(t) === 'temporary')
+    const matchesQuery = t.title.includes(query) || t.memo.includes(query)
+    return matchesQuery && matchesStatus && matchesType
+  })
+  shown = [...shown].sort(sort === '優先度順' ? (a,b) => ({高:3,中:2,低:1}[b.priority]-{高:3,中:2,低:1}[a.priority]) : (a,b) => +new Date(a.deadline)-+new Date(b.deadline))
+  return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了のやることがあります。毎日{dailyOpen}件、臨時{temporaryOpen}件。今日の集中は{todayLogged}分です。</></PageHeading>
+    <section className={`card focus-quick-card ${timerStartedAt ? 'timer-running' : ''}`}><div><span>QUICK FOCUS</span><h2>集中だけ記録</h2><p>タスクを選ばずに、1分単位の記録や計測ができます。</p></div><div className="focus-quick-actions"><button className="time-chip" type="button" onClick={() => logFocus(1)} title="1分集中を記録" aria-label="タスクを指定せずに1分集中を記録">+1分</button><button className="time-chip" type="button" onClick={() => logFocus(10)} title="10分集中を記録" aria-label="タスクを指定せずに10分集中を記録">+10分</button><button className="time-chip" type="button" onClick={() => logFocus(25)} title="25分集中を記録" aria-label="タスクを指定せずに25分集中を記録">+25分</button><label className="focus-minute-input"><input type="number" min="1" step="1" value={focusMinutes} onChange={e => setFocusMinutes(e.target.value)}/><span>分</span></label><button className="time-chip custom-focus" type="button" onClick={recordManualFocus}>記録</button><button className={`timer-button ${timerStartedAt ? 'running' : ''}`} type="button" aria-pressed={!!timerStartedAt} onClick={() => timerStartedAt ? stopFocusTimer() : setTimerStartedAt(Date.now())}>{timerStartedAt ? '停止して記録' : '計測開始'}</button><small>{timerStartedAt ? `計測中 ${timerLabel}` : `今日の集中 ${todayLogged}分 ・ 合計 ${loggedTotal}分`}</small></div></section>
+    <div className="task-type-strip" aria-label="タスクの種類">{(['すべて','毎日','臨時'] as const).map(v => <button key={v} className={typeFilter === v ? 'active' : ''} onClick={() => setTypeFilter(v)}><span>{v}</span><b>{v === '毎日' ? dailyOpen : v === '臨時' ? temporaryOpen : openCount}</b></button>)}</div>
     <div className="toolbar"><label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="やることを検索"/></label><div className="segmented">{['未完了','すべて','進行中','完了'].map(v => <button className={filter === v ? 'active' : ''} onClick={() => setFilter(v)} key={v}>{v}</button>)}</div><label className="select-wrap"><select value={sort} onChange={e => setSort(e.target.value)}><option>締切が近い順</option><option>優先度順</option></select><ChevronDown size={15}/></label></div>
     <section className="card task-table"><div className="table-head"><span>やること</span><span>締切</span><span>進捗・時間</span><span>優先度</span><span>状態</span><span>記録</span></div>{shown.map(t => {
-      const actual = taskActualMinutes(t)
-      return <div className="table-row" key={t.id}><div className="task-title-cell"><button className={`check ${t.status === '完了' ? 'done' : ''}`} type="button" aria-label={`「${t.title}」を${t.status === '完了' ? '未完了に戻す' : '完了にする'}`} title={t.status === '完了' ? '未完了に戻す' : '完了にする'} onClick={() => complete(t.id)}>{t.status === '完了' ? <Check size={16}/> : <Circle size={21}/>}</button><div><strong>{t.title}</strong><span>{taskCategoryLabel(t.category)}{t.memo ? ` ・ ${t.memo}` : ''}</span></div></div><div><b className={formatDeadline(t.deadline).urgent ? 'urgent-text' : ''}>{formatDeadline(t.deadline).label}</b><span>{formatDeadline(t.deadline).date}</span></div><div className="inline-progress task-progress-time"><span>{t.progress}%</span><div><i style={{width:`${t.progress}%`}}/></div><small>集中 {actual}分 / 目安 {t.estimatedMinutes}分</small></div><div><span className={`badge priority-${t.priority}`}>{t.priority}</span></div><div><span className={`status status-${t.status}`}>{t.status}</span></div><div className="row-actions time-log-actions"><button className="time-chip" type="button" onClick={() => logTime(t.id, 10)} title="10分集中を記録" aria-label={`「${t.title}」に10分集中を記録`}>+10分</button><button className="time-chip" type="button" onClick={() => logTime(t.id, 25)} title="25分集中を記録" aria-label={`「${t.title}」に25分集中を記録`}>+25分</button><button type="button" onClick={() => edit(t)} title="編集" aria-label={`「${t.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={() => remove(t.id)} title="削除" aria-label={`「${t.title}」を削除`}><Trash2 size={16}/></button></div></div>
+      const actual = taskActualMinutes(t), status = taskDisplayStatus(t), progress = status === '完了' ? 100 : taskProgressToday(t), kind = taskKind(t)
+      return <div className={`table-row task-kind-${kind}`} key={t.id}><div className="task-title-cell"><button className={`check ${status === '完了' ? 'done' : ''}`} type="button" aria-label={`「${t.title}」を${status === '完了' ? '未完了に戻す' : '完了にする'}`} title={status === '完了' ? '未完了に戻す' : '完了にする'} onClick={() => complete(t.id)}>{status === '完了' ? <Check size={16}/> : <Circle size={21}/>}</button><div><strong>{t.title}</strong><span><em className={`task-kind-label kind-${kind}`}>{taskTypeLabel(t)}</em>{taskCategoryLabel(t.category)}{t.memo ? ` ・ ${t.memo}` : ''}</span></div></div><div><b className={formatDeadline(t.deadline).urgent ? 'urgent-text' : ''}>{formatDeadline(t.deadline).label}</b><span>{formatDeadline(t.deadline).date}</span></div><div className="inline-progress task-progress-time"><span>{progress}%</span><div><i style={{width:`${progress}%`}}/></div><small>集中 {actual}分 / 目安 {t.estimatedMinutes}分</small></div><div><span className={`badge priority-${t.priority}`}>{t.priority}</span></div><div><span className={`status status-${status}`}>{status}</span></div><div className="row-actions time-log-actions"><button className="time-chip" type="button" onClick={() => logTime(t.id, 1)} title="1分集中を記録" aria-label={`「${t.title}」に1分集中を記録`}>+1分</button><button className="time-chip" type="button" onClick={() => logTime(t.id, 10)} title="10分集中を記録" aria-label={`「${t.title}」に10分集中を記録`}>+10分</button><button className="time-chip" type="button" onClick={() => logTime(t.id, 25)} title="25分集中を記録" aria-label={`「${t.title}」に25分集中を記録`}>+25分</button><button type="button" onClick={() => edit(t)} title="編集" aria-label={`「${t.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={() => remove(t.id)} title="削除" aria-label={`「${t.title}」を削除`}><Trash2 size={16}/></button></div></div>
     })}{!shown.length && <Empty text="条件に合うやることはありません"/>}</section>
-    <section className="card work-log-card"><div className="section-title"><div><span>FOCUS LOG</span><h2>最近の集中ログ</h2></div><small>今日の集中 {todayLogged}分</small></div>{recentLogs.length ? <div className="work-log-list">{recentLogs.map(log => <article key={log.id}><div><strong>{workLogMinutes(log)}分</strong><span>{formatWorkLogTime(log.createdAt)}</span></div><p>{taskTitle(log)}</p></article>)}</div> : <div className="work-log-empty"><Clock3 size={18}/><p>上のボタンか、タスク横の+10分・+25分で記録できます。</p></div>}</section>
+    <section className="card work-log-card"><div className="section-title"><div><span>FOCUS LOG</span><h2>最近の集中ログ</h2></div><small>今日の集中 {todayLogged}分</small></div>{recentLogs.length ? <div className="work-log-list">{recentLogs.map(log => <article key={log.id}><div><strong>{workLogMinutes(log)}分</strong><span>{formatWorkLogTime(log.createdAt)}</span></div><p>{taskTitle(log)}</p></article>)}</div> : <div className="work-log-empty"><Clock3 size={18}/><p>上のボタンか、タスク横の+1分・+10分・+25分で記録できます。</p></div>}</section>
   </>
 }
 
@@ -1012,8 +1053,8 @@ function EventModal({ event: initial, save, close, notice: _notice }: { event: C
 }
 
 function TaskModal({ task: initial, save, close, notice: _notice }: { task: Task; save:(t:Task)=>void; close:()=>void; notice?: string[] }) {
-  const [task,setTask]=useState<Task>(()=>({...initial,category:taskCategoryLabel(initial.category),actualMinutes:taskActualMinutes(initial)})), update=(k:keyof Task,v:string|number)=>setTask(p=>({...p,[k]:v}))
-  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={e=>{e.preventDefault();if(task.title.trim())save({...task,actualMinutes:taskActualMinutes(task)})}}><div className="modal-head"><div><span>TODO DETAILS</span><h2>{initial.title?'やることを編集':'新しいやること'}</h2><p className="modal-help">提出・買い物・連絡など、完了したらチェックできるものです。時間が決まっている授業や約束は「予定」に入れましょう。</p></div><button type="button" onClick={close} aria-label="やることの編集を閉じる" title="閉じる"><X/></button></div><div className="modal-body"><Field label="やること名" required><input autoFocus value={task.title} onChange={e=>update('title',e.target.value)} placeholder="完了させたいことは？"/></Field><div className="form-grid"><Field label="締切"><input type="datetime-local" value={task.deadline} onChange={e=>update('deadline',e.target.value)}/></Field><Field label="カテゴリ"><select value={task.category} onChange={e=>update('category',e.target.value)}>{taskCategoryOptions.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="優先度"><select value={task.priority} onChange={e=>update('priority',e.target.value)}><option>高</option><option>中</option><option>低</option></select></Field><Field label="所要時間の目安（分）"><input type="number" min="5" step="5" value={task.estimatedMinutes} onChange={e=>update('estimatedMinutes',Number(e.target.value))}/></Field><Field label="集中した時間（分）"><input type="number" min="0" step="5" value={taskActualMinutes(task)} onChange={e=>update('actualMinutes',Number(e.target.value))}/></Field><Field label="進捗"><select value={task.progress} onChange={e=>update('progress',Number(e.target.value) as Progress)}>{[0,25,50,75,100].map(v=><option value={v} key={v}>{v}%</option>)}</select></Field><Field label="ステータス"><select value={task.status} onChange={e=>update('status',e.target.value as Status)}><option>未着手</option><option>進行中</option><option>完了</option><option>保留</option></select></Field><Field label="メモ" wide><textarea value={task.memo} onChange={e=>update('memo',e.target.value)} placeholder="資料、提出条件、最初の一手など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!task.title.trim()}><Check size={17}/>保存する</button></div></form></div>
+  const [task,setTask]=useState<Task>(()=>({...initial,category:taskCategoryLabel(initial.category),actualMinutes:taskActualMinutes(initial),taskType:taskKind(initial),lastCompletedDate:initial.lastCompletedDate || ''})), update=(k:keyof Task,v:string|number)=>setTask(p=>({...p,[k]:v}))
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={e=>{e.preventDefault();if(task.title.trim())save({...task,actualMinutes:taskActualMinutes(task)})}}><div className="modal-head"><div><span>TODO DETAILS</span><h2>{initial.title?'やることを編集':'新しいやること'}</h2><p className="modal-help">臨時タスクは一度きり。毎日タスクは今日チェックしても、明日また未完了に戻ります。時間が決まっている授業や約束は「予定」に入れましょう。</p></div><button type="button" onClick={close} aria-label="やることの編集を閉じる" title="閉じる"><X/></button></div><div className="modal-body"><Field label="やること名" required><input autoFocus value={task.title} onChange={e=>update('title',e.target.value)} placeholder="完了させたいことは？"/></Field><div className="form-grid"><Field label="締切"><input type="datetime-local" value={task.deadline} onChange={e=>update('deadline',e.target.value)}/></Field><Field label="種類"><select value={taskKind(task)} onChange={e=>update('taskType',e.target.value)}>{taskTypeOptions.map(v=><option key={v.value} value={v.value}>{v.label}</option>)}</select></Field><Field label="カテゴリ"><select value={task.category} onChange={e=>update('category',e.target.value)}>{taskCategoryOptions.map(v=><option key={v}>{v}</option>)}</select></Field><Field label="優先度"><select value={task.priority} onChange={e=>update('priority',e.target.value)}><option>高</option><option>中</option><option>低</option></select></Field><Field label="所要時間の目安（分）"><input type="number" min="5" step="5" value={task.estimatedMinutes} onChange={e=>update('estimatedMinutes',Number(e.target.value))}/></Field><Field label="集中した時間（分）"><input type="number" min="0" step="1" value={taskActualMinutes(task)} onChange={e=>update('actualMinutes',Number(e.target.value))}/></Field><Field label="進捗"><select value={task.progress} onChange={e=>update('progress',Number(e.target.value) as Progress)}>{[0,25,50,75,100].map(v=><option value={v} key={v}>{v}%</option>)}</select></Field><Field label="ステータス"><select value={task.status} onChange={e=>update('status',e.target.value as Status)}><option>未着手</option><option>進行中</option><option>完了</option><option>保留</option></select></Field><Field label="メモ" wide><textarea value={task.memo} onChange={e=>update('memo',e.target.value)} placeholder="資料、提出条件、最初の一手など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!task.title.trim()}><Check size={17}/>保存する</button></div></form></div>
 }
 
 function Empty({text}:{text:string}) { return <div className="empty"><Archive/><p>{text}</p></div> }
