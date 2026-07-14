@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
+import syncTokenHandler from '../api/sync-token.js'
 import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, workLogMinutes } from '../src/lib.ts'
 
 async function callGptInbox(body, options = {}) {
@@ -41,6 +42,19 @@ async function callGptContext(options = {}) {
     end(value) { responseBody = String(value) },
   }
   await gptContextHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callSyncToken(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'GET', body, headers: options.headers || {} }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await syncTokenHandler(req, res)
   return { status: res.statusCode, body: JSON.parse(responseBody) }
 }
 
@@ -327,6 +341,32 @@ assert.equal(deletedAppData.status, 200)
 assert.equal(deletedAppData.body.deleted, true)
 const deletedAppDataRead = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(deletedAppDataRead.body.exists, false)
+
+delete process.env.SYNC_ACCESS_TOKEN
+delete process.env.GPT_ACTION_TOKEN
+keyValueStore.clear()
+queuedStore.clear()
+
+const setupStatusBefore = await callSyncToken()
+assert.equal(setupStatusBefore.status, 200)
+assert.equal(setupStatusBefore.body.configured, false)
+
+const generatedSyncToken = 'lb-test-auto-sync-token-1234567890abcdef'
+const setupToken = await callSyncToken({ token: generatedSyncToken }, { method: 'POST' })
+assert.equal(setupToken.status, 200)
+assert.equal(setupToken.body.mode, 'cloud-token')
+
+const storedTokenHeaders = { authorization: `Bearer ${generatedSyncToken}` }
+const storedTokenRead = await callAppData(undefined, { method: 'GET', headers: storedTokenHeaders })
+assert.equal(storedTokenRead.status, 200)
+assert.equal(storedTokenRead.body.exists, false)
+
+const storedTokenWrite = await callGptInbox({ items: [{ type: 'task', title: 'クラウド登録キーで追加', deadline: '2026-07-14' }] }, { headers: storedTokenHeaders })
+assert.equal(storedTokenWrite.status, 200)
+assert.equal(storedTokenWrite.body.delivery, 'synced')
+
+const storedTokenUnauthorized = await callAppData(undefined, { method: 'GET', headers: { authorization: 'Bearer wrong-token' } })
+assert.equal(storedTokenUnauthorized.status, 401)
 
 globalThis.fetch = originalFetch
 if (originalSyncToken === undefined) delete process.env.SYNC_ACCESS_TOKEN; else process.env.SYNC_ACCESS_TOKEN = originalSyncToken
