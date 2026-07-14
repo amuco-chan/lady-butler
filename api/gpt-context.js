@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto'
+import { authorizeContextRequest, contextAuthAvailable, redisConfig, text } from '../server/sync-auth.js'
 
 const dataKey = 'lady-butler:app-data:v1'
 
@@ -12,33 +12,15 @@ function send(res, status, data) {
   res.end(JSON.stringify(data))
 }
 
-const text = value => typeof value === 'string' ? value.trim() : ''
 const shortText = (value, max = 500) => text(value).slice(0, max)
 
-function redisConfig() {
-  const url = text(process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL).replace(/\/$/, '')
-  const token = text(process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN)
-  return url && token ? { url, token } : null
-}
-
-function bearerToken(req) {
-  const header = text(req.headers?.authorization)
-  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : header
-}
-
-function secureEqual(left, right) {
-  const a = Buffer.from(text(left)), b = Buffer.from(text(right))
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b)
-}
-
-function requireAuth(req, res) {
+async function requireAuth(req, res) {
   const config = redisConfig()
-  const tokens = [...new Set([process.env.GPT_ACTION_TOKEN, process.env.SYNC_ACCESS_TOKEN].map(text).filter(Boolean))]
-  if (!config || !tokens.length) {
+  if (!config || !(await contextAuthAvailable())) {
     send(res, 503, { ok: false, error: 'GPT参照用の同期ストレージが未設定です。' })
     return null
   }
-  if (!tokens.some(token => secureEqual(bearerToken(req), token))) {
+  if (!(await authorizeContextRequest(req))) {
     send(res, 401, { ok: false, error: '同期キーが正しくありません。' })
     return null
   }
@@ -139,7 +121,7 @@ function contextFrom(envelope) {
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return send(res, 200, { ok: true })
   if (req.method !== 'GET') return send(res, 405, { ok: false, error: 'GET only' })
-  const config = requireAuth(req, res)
+  const config = await requireAuth(req, res)
   if (!config) return
   try {
     const envelope = await readEnvelope(config)
