@@ -1,24 +1,10 @@
-import { timingSafeEqual } from 'node:crypto'
 import { subscriptionId } from '../server/web-push.js'
+import { authorizeSyncRequest, redisConfig, redisPipeline, syncAuthAvailable, text } from '../server/sync-auth.js'
 
 const subscriptionsKey = 'lady-butler:push-subscriptions:v1'
 
-function text(value) { return typeof value === 'string' ? value.trim() : '' }
-function redisConfig() {
-  const url = text(process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL).replace(/\/$/, '')
-  const token = text(process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN)
-  return url && token ? { url, token } : null
-}
-function bearerToken(req) {
-  const header = text(req.headers?.authorization)
-  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : header
-}
-function secureEqual(left, right) {
-  const a = Buffer.from(text(left)), b = Buffer.from(text(right))
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b)
-}
-function available() {
-  return !!(redisConfig() && text(process.env.SYNC_ACCESS_TOKEN) && text(process.env.VAPID_PUBLIC_KEY) && text(process.env.VAPID_PRIVATE_KEY))
+async function available() {
+  return !!(redisConfig() && await syncAuthAvailable() && text(process.env.VAPID_PUBLIC_KEY) && text(process.env.VAPID_PRIVATE_KEY))
 }
 function send(res, status, data) {
   res.statusCode = status
@@ -36,21 +22,12 @@ async function readJson(req) {
   const raw = Buffer.concat(chunks.map(chunk => Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))).toString('utf8')
   return raw ? JSON.parse(raw) : {}
 }
-async function redisPipeline(commands) {
-  const config = redisConfig()
-  if (!config) throw new Error('push storage unavailable')
-  const response = await fetch(`${config.url}/pipeline`, { method: 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(commands) })
-  const result = await response.json().catch(() => null)
-  if (!response.ok || !Array.isArray(result) || result.some(item => item?.error)) throw new Error('push storage error')
-  return result.map(item => item?.result)
-}
-function authorized(req) { return secureEqual(bearerToken(req), process.env.SYNC_ACCESS_TOKEN) }
-
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return send(res, 200, { ok: true })
-  if (req.method === 'GET') return send(res, 200, { ok: true, available: available(), publicKey: available() ? process.env.VAPID_PUBLIC_KEY : '', schedule: '毎朝8時ごろ' })
-  if (!available()) return send(res, 503, { ok: false, error: 'バックグラウンド通知はまだ設定されていません。' })
-  if (!authorized(req)) return send(res, 401, { ok: false, error: '同期キーが正しくありません。' })
+  const isAvailable = await available()
+  if (req.method === 'GET') return send(res, 200, { ok: true, available: isAvailable, publicKey: isAvailable ? process.env.VAPID_PUBLIC_KEY : '', schedule: '毎朝8時ごろ' })
+  if (!isAvailable) return send(res, 503, { ok: false, error: 'バックグラウンド通知はまだ設定されていません。' })
+  if (!(await authorizeSyncRequest(req))) return send(res, 401, { ok: false, error: '同期キーが正しくありません。' })
 
   try {
     const body = await readJson(req)
