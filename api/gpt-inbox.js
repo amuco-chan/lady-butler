@@ -1,4 +1,5 @@
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash } from 'node:crypto'
+import { actionAuthAvailable, authorizeActionRequest, authorizeSyncRequest, redisPipeline, syncAuthAvailable, text } from '../server/sync-auth.js'
 
 const allowedCategories = new Set(['課題', '授業', '生活', 'バイト', '買い物', 'その他'])
 const allowedPriorities = new Set(['高', '中', '低'])
@@ -21,10 +22,6 @@ async function readJson(req) {
   for await (const chunk of req) chunks.push(chunk)
   const text = Buffer.concat(chunks.map(chunk => Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))).toString('utf8')
   return text ? JSON.parse(text) : {}
-}
-
-function text(value) {
-  return typeof value === 'string' ? value.trim() : ''
 }
 
 function shortText(value, max = 500) {
@@ -148,49 +145,6 @@ function withType(item, type) {
   return item && typeof item === 'object' ? { ...item, type } : item
 }
 
-function redisConfig() {
-  const url = text(process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL).replace(/\/$/, '')
-  const token = text(process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN)
-  return url && token ? { url, token } : null
-}
-
-function bearerToken(req) {
-  const header = text(req.headers?.authorization)
-  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : header
-}
-
-function secureEqual(left, right) {
-  const a = Buffer.from(text(left)), b = Buffer.from(text(right))
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b)
-}
-
-function syncAvailable() {
-  return !!(redisConfig() && text(process.env.SYNC_ACCESS_TOKEN))
-}
-
-function actionToken() {
-  return text(process.env.GPT_ACTION_TOKEN || process.env.SYNC_ACCESS_TOKEN)
-}
-
-function actionSyncAvailable() {
-  return !!(redisConfig() && actionToken())
-}
-
-async function redisPipeline(commands) {
-  const config = redisConfig()
-  if (!config) throw new Error('sync storage is not configured')
-  const response = await fetch(`${config.url}/pipeline`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(commands),
-  })
-  const result = await response.json().catch(() => null)
-  if (!response.ok || !Array.isArray(result) || result.some(item => item?.error)) {
-    throw new Error(`sync storage error: ${response.status}`)
-  }
-  return result.map(item => item?.result)
-}
-
 function itemSignature(item) {
   return item.type === 'event'
     ? `${item.type}|${item.title}|${item.startAt}|${item.endAt}|${item.location}`
@@ -225,24 +179,24 @@ async function removeQueue(ids) {
   return Number(removed) || 0
 }
 
-function requireSyncAuth(req, res) {
-  if (!syncAvailable()) {
+async function requireSyncAuth(req, res) {
+  if (!(await syncAuthAvailable())) {
     send(res, 503, { ok: false, error: '直接同期はまだ設定されていません。' })
     return false
   }
-  if (!secureEqual(bearerToken(req), process.env.SYNC_ACCESS_TOKEN)) {
+  if (!(await authorizeSyncRequest(req))) {
     send(res, 401, { ok: false, error: '同期キーが正しくありません。' })
     return false
   }
   return true
 }
 
-function requireActionAuth(req, res) {
-  if (!actionSyncAvailable()) {
+async function requireActionAuth(req, res) {
+  if (!(await actionAuthAvailable())) {
     send(res, 503, { ok: false, error: 'GPT連携用ストレージが未設定です。' })
     return false
   }
-  if (!secureEqual(bearerToken(req), actionToken())) {
+  if (!(await authorizeActionRequest(req))) {
     send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。' })
     return false
   }
@@ -254,13 +208,13 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === 'GET') {
-      if (!requireSyncAuth(req, res)) return
+      if (!(await requireSyncAuth(req, res))) return
       const items = await readQueue()
       return send(res, 200, { ok: true, count: items.length, delivery: 'synced', items })
     }
 
     if (req.method === 'DELETE') {
-      if (!requireSyncAuth(req, res)) return
+      if (!(await requireSyncAuth(req, res))) return
       const body = await readJson(req)
       const removed = await removeQueue(body.ids)
       return send(res, 200, { ok: true, removed })
@@ -285,8 +239,8 @@ export default async function handler(req, res) {
 
     if (!items.length) return send(res, 400, { ok: false, error: '候補の title が必要です。' })
 
-    if (actionSyncAvailable()) {
-      if (!requireActionAuth(req, res)) return
+    if (await actionAuthAvailable()) {
+      if (!(await requireActionAuth(req, res))) return
       const queued = await saveQueue(items)
       return send(res, 200, {
         ok: true,
