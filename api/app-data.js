@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto'
+import { authorizeSyncRequest, redisPipeline, syncAuthAvailable, syncTokenHashKey } from '../server/sync-auth.js'
 
 const dataKey = 'lady-butler:app-data:v1'
 const gptQueueKey = 'lady-butler:gpt-inbox:v1'
@@ -23,53 +23,16 @@ async function readJson(req) {
   return body.length ? JSON.parse(body.toString('utf8')) : {}
 }
 
-function text(value) {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function redisConfig() {
-  const url = text(process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL).replace(/\/$/, '')
-  const token = text(process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN)
-  return url && token ? { url, token } : null
-}
-
-function bearerToken(req) {
-  const header = text(req.headers?.authorization)
-  return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : header
-}
-
-function secureEqual(left, right) {
-  const a = Buffer.from(text(left)), b = Buffer.from(text(right))
-  return a.length === b.length && a.length > 0 && timingSafeEqual(a, b)
-}
-
-function syncAvailable() {
-  return !!(redisConfig() && text(process.env.SYNC_ACCESS_TOKEN))
-}
-
-function requireAuth(req, res) {
-  if (!syncAvailable()) {
+async function requireAuth(req, res) {
+  if (!(await syncAuthAvailable())) {
     send(res, 503, { ok: false, error: '端末間同期はまだ設定されていません。' })
     return false
   }
-  if (!secureEqual(bearerToken(req), process.env.SYNC_ACCESS_TOKEN)) {
+  if (!(await authorizeSyncRequest(req))) {
     send(res, 401, { ok: false, error: '同期キーが正しくありません。' })
     return false
   }
   return true
-}
-
-async function redisPipeline(commands) {
-  const config = redisConfig()
-  if (!config) throw new Error('sync storage is not configured')
-  const response = await fetch(`${config.url}/pipeline`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(commands),
-  })
-  const result = await response.json().catch(() => null)
-  if (!response.ok || !Array.isArray(result) || result.some(item => item?.error)) throw new Error(`sync storage error: ${response.status}`)
-  return result.map(item => item?.result)
 }
 
 function normalizeData(value) {
@@ -95,7 +58,7 @@ async function readEnvelope() {
 
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return send(res, 200, { ok: true })
-  if (!requireAuth(req, res)) return
+  if (!(await requireAuth(req, res))) return
 
   try {
     if (req.method === 'GET') {
@@ -106,7 +69,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'DELETE') {
-      await redisPipeline([['DEL', dataKey, gptQueueKey, pushSubscriptionsKey]])
+      await redisPipeline([['DEL', dataKey, gptQueueKey, pushSubscriptionsKey, syncTokenHashKey]])
       return send(res, 200, { ok: true, deleted: true })
     }
 
