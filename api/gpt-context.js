@@ -17,11 +17,11 @@ const shortText = (value, max = 500) => text(value).slice(0, max)
 async function requireAuth(req, res) {
   const config = redisConfig()
   if (!config || !(await contextAuthAvailable())) {
-    send(res, 503, { ok: false, error: 'GPT参照用の同期ストレージが未設定です。' })
+    send(res, 503, { ok: false, error: 'GPT連携用の認証キーが未設定です。Vercelの GPT_ACTION_TOKEN を確認してください。' })
     return null
   }
   if (!(await authorizeContextRequest(req))) {
-    send(res, 401, { ok: false, error: '同期キーが正しくありません。' })
+    send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。GPT_ACTION_TOKEN を確認してください。' })
     return null
   }
   return config
