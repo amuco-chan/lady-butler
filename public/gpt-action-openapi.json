@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.4.0"
+    "version": "2.4.1"
   },
   "servers": [
     {
@@ -17,6 +17,7 @@
         "summary": "Read the user's current Lady Butler context",
         "description": "Call when the user asks about tasks, schedule, mood, diary, priorities, or what to do next, and before resolving relative dates for a new item. Use currentLocalDateTime and timeZone as the date anchor. Do not call for unrelated conversation or invent missing records.",
         "x-openai-isConsequential": false,
+        "security": [{ "GptActionBearer": [] }],
         "responses": {
           "200": {
             "description": "Current user-approved tasks, events, mood logs, diary entries, and planning guidance",
@@ -68,6 +69,7 @@
         "summary": "Naturally capture tasks and calendar plans in Lady Butler",
         "description": "Call once for real future tasks or events. Ignore hypotheticals, completed or rejected items, examples, and anything the user says not to record. For relative dates, call getLadyButlerContext first. Tasks may omit deadlines; events require a known date and time.",
         "x-openai-isConsequential": false,
+        "security": [{ "GptActionBearer": [] }],
         "requestBody": {
           "required": true,
           "content": {
@@ -211,6 +213,15 @@
           "401": { "description": "The GPT Action API key is missing or invalid" },
           "503": { "description": "The private sync storage is not configured" }
         }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "GptActionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Use the Vercel GPT_ACTION_TOKEN value for Custom GPT Actions. Do not use the Lady Butler device sync key here."
       }
     }
   }
