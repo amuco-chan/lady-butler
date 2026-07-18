@@ -101,7 +101,7 @@ iPhoneはSafariの共有メニューから「ホーム画面に追加」、Andro
 - `src/lib.ts` — 保存、優先順位、執事応答、GPT受信データ変換
 - `src/types.ts` — データ型
 - `src/styles.css` — UIデザインとスマートフォン対応
-- `api/gpt-inbox.js` — Custom GPT候補の直接同期と、安全な取り込みリンクへのフォールバック
+- `api/gpt-inbox.js` — Custom GPT候補を確認待ちへ直接同期するAPI
 - `api/gpt-context.js` — Custom GPTへ許可範囲だけ返す読み取り専用API
 - `api/app-data.js` — PC・スマートフォン間のアプリデータ同期
 - `public/gpt-action-openapi.json` — Custom GPT Actions用のOpenAPI定義
