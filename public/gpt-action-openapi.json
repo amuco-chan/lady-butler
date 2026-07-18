@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.4.2"
+    "version": "2.4.3"
   },
   "servers": [
     {
@@ -213,6 +213,7 @@
     }
   },
   "components": {
+    "schemas": {},
     "securitySchemes": {
       "GptActionBearer": {
         "type": "http",
