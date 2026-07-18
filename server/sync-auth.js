@@ -74,14 +74,12 @@ export async function authorizeSyncRequest(req) {
 
 export async function actionAuthAvailable() {
   if (!redisConfig()) return false
-  if (text(process.env.GPT_ACTION_TOKEN)) return true
-  return syncAuthAvailable()
+  return !!text(process.env.GPT_ACTION_TOKEN)
 }
 
 export async function actionTokenMatches(token) {
   const actionToken = text(process.env.GPT_ACTION_TOKEN)
-  if (actionToken) return secureEqual(token, actionToken)
-  return syncTokenMatches(token)
+  return !!actionToken && secureEqual(token, actionToken)
 }
 
 export async function authorizeActionRequest(req) {
@@ -89,16 +87,11 @@ export async function authorizeActionRequest(req) {
 }
 
 export async function contextAuthAvailable() {
-  if (!redisConfig()) return false
-  if (text(process.env.GPT_ACTION_TOKEN) || text(process.env.SYNC_ACCESS_TOKEN)) return true
-  return !!(await readStoredSyncTokenHash())
+  return actionAuthAvailable()
 }
 
 export async function contextTokenMatches(token) {
-  const value = text(token)
-  if (!value) return false
-  if (text(process.env.GPT_ACTION_TOKEN) && secureEqual(value, process.env.GPT_ACTION_TOKEN)) return true
-  return syncTokenMatches(value)
+  return actionTokenMatches(token)
 }
 
 export async function authorizeContextRequest(req) {
