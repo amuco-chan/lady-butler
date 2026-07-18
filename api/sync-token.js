@@ -1,4 +1,4 @@
-import { authorizeSyncRequest, redisConfig, storeSyncToken, syncAuthAvailable, text, validSyncToken } from '../server/sync-auth.js'
+import { authorizeSyncRequest, readStoredSyncTokenHash, redisConfig, storeSyncToken, syncAuthAvailable, text, validSyncToken } from '../server/sync-auth.js'
 
 const maxBodyBytes = 16 * 1024
 
@@ -27,20 +27,26 @@ export default async function handler(req, res) {
 
   try {
     const configured = storageConfigured && await syncAuthAvailable()
+    const cloudTokenConfigured = storageConfigured && !!(await readStoredSyncTokenHash())
+    const envTokenConfigured = !!text(process.env.SYNC_ACCESS_TOKEN)
+    const mode = envTokenConfigured && cloudTokenConfigured ? 'vercel-env-and-cloud-token'
+      : envTokenConfigured ? 'vercel-env'
+        : cloudTokenConfigured ? 'cloud-token'
+          : 'not-configured'
 
     if (req.method === 'GET') {
       return send(res, 200, {
         ok: true,
         storageConfigured,
         configured,
-        mode: text(process.env.SYNC_ACCESS_TOKEN) ? 'vercel-env' : configured ? 'cloud-token' : 'not-configured',
+        mode,
       })
     }
 
     if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'GET or POST only' })
     if (!storageConfigured) return send(res, 503, { ok: false, error: 'クラウド保存の設定がまだありません。Upstash RedisをVercelに接続してください。' })
 
-    if (configured && !(await authorizeSyncRequest(req))) {
+    if (cloudTokenConfigured && !(await authorizeSyncRequest(req))) {
       return send(res, 401, { ok: false, error: '既存の同期キーと一致しません。現在使っている同期キーで認証してから更新してください。' })
     }
 
