@@ -193,11 +193,11 @@ async function requireSyncAuth(req, res) {
 
 async function requireActionAuth(req, res) {
   if (!text(process.env.GPT_ACTION_TOKEN)) {
-    send(res, 503, { ok: false, error: 'GPT連携用の認証キーが未設定です。Vercelの GPT_ACTION_TOKEN を確認してください。' })
+    send(res, 503, { ok: false, error: 'GPT連携用の認証キーが未設定です。Vercelの環境変数 GPT_ACTION_TOKEN を追加し、Custom GPTのActions認証にも同じ値を入れてください。' })
     return false
   }
   if (!(await authorizeActionRequest(req))) {
-    send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。GPT_ACTION_TOKEN を確認してください。' })
+    send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。Custom GPTのActions認証に、Vercelの GPT_ACTION_TOKEN と同じ値を入れてください。アプリの共通同期キーではありません。' })
     return false
   }
   return true
