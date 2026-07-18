@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.4.1"
+    "version": "2.4.2"
   },
   "servers": [
     {
@@ -189,7 +189,7 @@
         },
         "responses": {
           "200": {
-            "description": "Candidates synced directly or an import link returned",
+            "description": "Candidates synced directly into the Lady Butler review queue",
             "content": {
               "application/json": {
                 "schema": {
@@ -197,11 +197,7 @@
                   "properties": {
                     "ok": { "type": "boolean" },
                     "count": { "type": "integer" },
-                    "importUrl": {
-                      "type": "string",
-                      "description": "Present only for link delivery. Open this URL once to import candidates into Lady Butler."
-                    },
-                    "delivery": { "type": "string", "enum": ["synced", "link"] },
+                    "delivery": { "type": "string", "enum": ["synced"] },
                     "requiresOpen": { "type": "boolean" },
                     "message": { "type": "string" }
                   }
@@ -211,7 +207,7 @@
           },
           "400": { "description": "No valid task or event candidate was supplied" },
           "401": { "description": "The GPT Action API key is missing or invalid" },
-          "503": { "description": "The private sync storage is not configured" }
+          "503": { "description": "The private sync storage or GPT_ACTION_TOKEN is not configured" }
         }
       }
     }
