@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.4.3"
+    "version": "2.4.4"
   },
   "servers": [
     {
@@ -199,7 +199,23 @@
                     "count": { "type": "integer" },
                     "delivery": { "type": "string", "enum": ["synced"] },
                     "requiresOpen": { "type": "boolean" },
-                    "message": { "type": "string" }
+                    "message": { "type": "string" },
+                    "items": {
+                      "type": "array",
+                      "description": "The task and event candidates that were accepted by Lady Butler. Use these titles when confirming the result to the user.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["task", "event"] },
+                          "title": { "type": "string" },
+                          "deadline": { "type": "string" },
+                          "startAt": { "type": "string" },
+                          "endAt": { "type": "string" },
+                          "category": { "type": "string" },
+                          "memo": { "type": "string" }
+                        }
+                      }
+                    }
                   }
                 }
               }
