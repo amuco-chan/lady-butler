@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { actionAuthAvailable, authorizeActionRequest, authorizeSyncRequest, redisPipeline, syncAuthAvailable, text } from '../server/sync-auth.js'
+import { authorizeActionRequest, authorizeSyncRequest, redisPipeline, syncAuthAvailable, text } from '../server/sync-auth.js'
 
 const allowedCategories = new Set(['課題', '授業', '生活', 'バイト', '買い物', 'その他'])
 const allowedPriorities = new Set(['高', '中', '低'])
@@ -192,12 +192,12 @@ async function requireSyncAuth(req, res) {
 }
 
 async function requireActionAuth(req, res) {
-  if (!(await actionAuthAvailable())) {
-    send(res, 503, { ok: false, error: 'GPT連携用ストレージが未設定です。' })
+  if (!text(process.env.GPT_ACTION_TOKEN)) {
+    send(res, 503, { ok: false, error: 'GPT連携用の認証キーが未設定です。Vercelの GPT_ACTION_TOKEN を確認してください。' })
     return false
   }
   if (!(await authorizeActionRequest(req))) {
-    send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。' })
+    send(res, 401, { ok: false, error: 'GPT連携キーが正しくありません。GPT_ACTION_TOKEN を確認してください。' })
     return false
   }
   return true
@@ -221,6 +221,7 @@ export default async function handler(req, res) {
     }
 
     if (req.method !== 'POST') return send(res, 405, { ok: false, error: 'GET, POST or DELETE only' })
+    if (!(await requireActionAuth(req, res))) return
 
     const body = await readJson(req)
     const sourceText = shortText(body.sourceText || body.source_text || body.originalText || body.original_text)
@@ -239,33 +240,14 @@ export default async function handler(req, res) {
 
     if (!items.length) return send(res, 400, { ok: false, error: '候補の title が必要です。' })
 
-    if (await actionAuthAvailable()) {
-      if (!(await requireActionAuth(req, res))) return
-      const queued = await saveQueue(items)
-      return send(res, 200, {
-        ok: true,
-        count: queued.length,
-        delivery: 'synced',
-        requiresOpen: false,
-        message: `${queued.length}件を送りました。内容が明確ならLady Butlerが自動追加します。`,
-        items: queued,
-      })
-    }
-
-    const payload = { source: 'custom-gpt', sourceText, items }
-    const token = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
-    const host = req.headers['x-forwarded-host'] || req.headers.host || 'lady-butler.vercel.app'
-    const protocol = req.headers['x-forwarded-proto'] || 'https'
-    const importUrl = `${protocol}://${host}/#gpt-import=${token}`
-
+    const queued = await saveQueue(items)
     return send(res, 200, {
       ok: true,
-      count: items.length,
-      delivery: 'link',
-      requiresOpen: true,
-      importUrl,
-      message: 'このリンクを一度開くと、内容が明確なものはLady Butlerへ自動追加されます。',
-      items,
+      count: queued.length,
+      delivery: 'synced',
+      requiresOpen: false,
+      message: `${queued.length}件を送りました。内容が明確ならLady Butlerが自動追加します。`,
+      items: queued,
     })
   } catch (error) {
     return send(res, 400, { ok: false, error: 'JSONを読み取れませんでした。', detail: String(error?.message || error) })
