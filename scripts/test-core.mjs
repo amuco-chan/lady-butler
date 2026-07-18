@@ -173,11 +173,11 @@ assert.equal(taskWithoutDeadline[0].confidence, 'medium')
 assert.equal(taskWithoutDeadline[0].deadline, '')
 assert.deepEqual(taskWithoutDeadline[0].ambiguities, [])
 
-const apiTaskWithoutDeadline = await callGptInbox({ items: [{ type: 'task', title: '洗剤を買う' }] })
-assert.equal(apiTaskWithoutDeadline.body.items[0].deadlineIsFallback, true)
-assert.equal(apiTaskWithoutDeadline.body.items[0].confidence, 'medium')
-assert.equal(apiTaskWithoutDeadline.body.items[0].deadline, '')
-assert.deepEqual(apiTaskWithoutDeadline.body.items[0].ambiguities, [])
+const preAuthActionToken = process.env.GPT_ACTION_TOKEN
+process.env.GPT_ACTION_TOKEN = 'gpt-action-auth-check-token'
+const unauthenticatedInboxBeforeValidation = await callGptInbox({ items: [{ type: 'task', title: '洗剤を買う' }] })
+assert.equal(unauthenticatedInboxBeforeValidation.status, 401)
+if (preAuthActionToken === undefined) delete process.env.GPT_ACTION_TOKEN; else process.env.GPT_ACTION_TOKEN = preAuthActionToken
 
 const invalidTaskDate = normalizeGptInboxPayload({
   items: [{ type: 'task', title: 'レポートを提出する', deadline: '明日18時' }],
@@ -193,23 +193,20 @@ assert.equal(invalidEventDate[0].startIsFallback, true)
 assert.deepEqual(invalidEventDate[0].ambiguities, ['開始日時を確認'])
 assert.equal(canAutoAddInboxItem(invalidEventDate[0]), false)
 
-const apiDeadline = await callGptInbox({
+const apiDeadline = normalizeGptInboxPayload({
   sourceText: '金曜18時までにレポートを提出する',
   items: [{ type: 'task', title: 'レポートを提出する', deadline: '2026-06-26T18:00', startAt: '2026-06-26T18:00', category: '予定' }],
 })
-assert.equal(apiDeadline.status, 200)
-assert.equal(apiDeadline.body.items[0].type, 'task')
-assert.equal(apiDeadline.body.items[0].category, '課題')
-assert.equal(apiDeadline.body.delivery, 'link')
-assert.equal(apiDeadline.body.requiresOpen, true)
+assert.equal(apiDeadline[0].type, 'task')
+assert.equal(apiDeadline[0].category, '課題')
 
-const apiShift = await callGptInbox({
+const apiShift = normalizeGptInboxPayload({
   sourceText: '毎週金曜18時からバイト',
   items: [{ type: 'event', title: 'バイト', startAt: '2026-06-26T18:00', endAt: '2026-06-26T22:00', recurrence: 'weekly' }],
 })
-assert.equal(apiShift.body.items[0].type, 'event')
-assert.equal(apiShift.body.items[0].startAt, '2026-06-26T18:00')
-assert.equal(apiShift.body.items[0].recurrence, 'weekly')
+assert.equal(apiShift[0].type, 'event')
+assert.equal(apiShift[0].startAt, '2026-06-26T18:00')
+assert.equal(apiShift[0].recurrence, 'weekly')
 
 const smartCandidate = normalizeGptInboxPayload({
   items: [{ id: 'stable-id', type: 'task', title: '申請内容を確認', deadline: '2026-07-02', confidence: 'low', ambiguities: ['締切時刻が未確認'], createdAt: '2026-07-01T10:00:00.000Z' }],
@@ -260,12 +257,13 @@ globalThis.fetch = async (_url, options) => {
 }
 
 const directSync = await callGptInbox({
-  sourceText: '明日の17時までに申請する',
-  items: [{ type: 'task', title: '申請する', deadline: '2026-07-02T17:00', confidence: 'high' }],
+  sourceText: '明日の17時までにレポートを提出する',
+  items: [{ type: 'task', title: 'レポートを提出する', deadline: '2026-07-02T17:00', startAt: '2026-07-02T17:00', category: '予定', confidence: 'high' }],
 }, { headers: { authorization: 'Bearer gpt-action-test-token' } })
 assert.equal(directSync.status, 200)
 assert.equal(directSync.body.delivery, 'synced')
 assert.equal(directSync.body.requiresOpen, false)
+assert.equal(directSync.body.items[0].category, '課題')
 assert.equal(directSync.body.items[0].id.length, 24)
 assert.equal(pipelines[0][0][0], 'HSET')
 assert.equal(pipelines[0].at(-1)[0], 'EXPIRE')
@@ -273,7 +271,7 @@ assert.equal(pipelines[0].at(-1)[0], 'EXPIRE')
 const cloudRead = await callGptInbox(undefined, { method: 'GET', headers: { authorization: 'Bearer personal-test-token' } })
 assert.equal(cloudRead.status, 200)
 assert.equal(cloudRead.body.count, 1)
-assert.equal(cloudRead.body.items[0].title, '申請する')
+assert.equal(cloudRead.body.items[0].title, 'レポートを提出する')
 
 const cloudDelete = await callGptInbox({ ids: [directSync.body.items[0].id] }, { method: 'DELETE', headers: { authorization: 'Bearer personal-test-token' } })
 assert.equal(cloudDelete.body.removed, 1)
@@ -376,9 +374,8 @@ const storedTokenRead = await callAppData(undefined, { method: 'GET', headers: s
 assert.equal(storedTokenRead.status, 200)
 assert.equal(storedTokenRead.body.exists, false)
 
-const storedTokenWrite = await callGptInbox({ items: [{ type: 'task', title: 'クラウド登録キーで追加', deadline: '2026-07-14' }] }, { headers: storedTokenHeaders })
-assert.equal(storedTokenWrite.status, 200)
-assert.equal(storedTokenWrite.body.delivery, 'synced')
+const storedTokenCannotPostToGpt = await callGptInbox({ items: [{ type: 'task', title: 'クラウド登録キーで追加', deadline: '2026-07-14' }] }, { headers: storedTokenHeaders })
+assert.equal(storedTokenCannotPostToGpt.status, 503)
 
 const storedTokenUnauthorized = await callAppData(undefined, { method: 'GET', headers: { authorization: 'Bearer wrong-token' } })
 assert.equal(storedTokenUnauthorized.status, 401)
@@ -394,7 +391,7 @@ const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
-assert.equal(actionSchema.info.version, '2.4.1')
+assert.equal(actionSchema.info.version, '2.4.2')
 assert.equal(actionSchema.components.securitySchemes.GptActionBearer.scheme, 'bearer')
 assert.equal(actionSchema.paths['/api/gpt-context'].get.operationId, 'getLadyButlerContext')
 assert.ok(actionSchema.paths['/api/gpt-context'].get.responses['200'].content['application/json'].schema.properties.currentLocalDateTime)
@@ -403,6 +400,7 @@ assert.equal(actionSchema.paths['/api/gpt-context'].get['x-openai-isConsequentia
 assert.deepEqual(actionSchema.paths['/api/gpt-context'].get.security, [{ GptActionBearer: [] }])
 assert.equal(actionSchema.paths['/api/gpt-inbox'].post['x-openai-isConsequential'], false)
 assert.deepEqual(actionSchema.paths['/api/gpt-inbox'].post.security, [{ GptActionBearer: [] }])
+assert.deepEqual(actionSchema.paths['/api/gpt-inbox'].post.responses['200'].content['application/json'].schema.properties.delivery.enum, ['synced'])
 assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /real future tasks or events/)
 assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /getLadyButlerContext/)
 assert.ok(actionSchema.paths['/api/gpt-inbox'].post.description.length <= 300)
