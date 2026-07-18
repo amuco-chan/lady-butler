@@ -968,12 +968,17 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
     setGptChecking(true)
     setGptCheckMessage('')
     try {
-      const response = await fetch('/api/gpt-context', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
+      const response = await fetch('/api/app-data', { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' })
       const payload = await response.json().catch(() => ({}))
       if (response.status === 401) throw new Error('共通同期キーで共有データを読めません。アプリで作った同期キーを入れてください。GPT_ACTION_TOKENとは別です。')
       if (!response.ok) throw new Error(payload.error || '読み取りを確認できませんでした。')
-      const summary = payload.summary || {}
-      setGptCheckMessage(`共有データ正常：やること${summary.openTaskCount ?? 0}件・予定${summary.upcomingEventCount ?? 0}件・気分${summary.recentMoodCount ?? 0}件・日記${summary.recentDiaryCount ?? 0}件を参照できます。GPT側のAction認証には別途GPT_ACTION_TOKENを使います。`)
+      const data = normalizeCloudData(payload.data)
+      const tasks = data.tasks ?? []
+      const events = data.events ?? []
+      const moodLogs = data.moodLogs ?? []
+      const diaries = data.diaries ?? []
+      const openTaskCount = tasks.filter(task => task?.taskType === 'daily' || task?.status !== '完了').length
+      setGptCheckMessage(`共有データ正常：やること${openTaskCount}件・予定${events.length}件・気分${moodLogs.length}件・日記${diaries.length}件を保存できています。GPT側のAction認証には別途GPT_ACTION_TOKENを使います。`)
     } catch (error) {
       setGptCheckMessage(error instanceof Error ? error.message : '読み取りを確認できませんでした。')
     } finally {
