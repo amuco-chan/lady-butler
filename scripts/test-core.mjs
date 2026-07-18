@@ -342,6 +342,21 @@ assert.equal(deletedAppData.body.deleted, true)
 const deletedAppDataRead = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(deletedAppDataRead.body.exists, false)
 
+keyValueStore.clear()
+queuedStore.clear()
+const legacyEnvStatusBefore = await callSyncToken()
+assert.equal(legacyEnvStatusBefore.status, 200)
+assert.equal(legacyEnvStatusBefore.body.mode, 'vercel-env')
+
+const envFallbackGeneratedToken = 'lb-test-env-fallback-token-1234567890'
+const envFallbackSetup = await callSyncToken({ token: envFallbackGeneratedToken }, { method: 'POST' })
+assert.equal(envFallbackSetup.status, 200)
+assert.equal(envFallbackSetup.body.mode, 'vercel-env-and-cloud-token')
+
+const envFallbackRead = await callAppData(undefined, { method: 'GET', headers: { authorization: `Bearer ${envFallbackGeneratedToken}` } })
+assert.equal(envFallbackRead.status, 200)
+assert.equal(envFallbackRead.body.exists, false)
+
 delete process.env.SYNC_ACCESS_TOKEN
 delete process.env.GPT_ACTION_TOKEN
 keyValueStore.clear()
@@ -379,12 +394,15 @@ const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
-assert.equal(actionSchema.info.version, '2.4.0')
+assert.equal(actionSchema.info.version, '2.4.1')
+assert.equal(actionSchema.components.securitySchemes.GptActionBearer.scheme, 'bearer')
 assert.equal(actionSchema.paths['/api/gpt-context'].get.operationId, 'getLadyButlerContext')
 assert.ok(actionSchema.paths['/api/gpt-context'].get.responses['200'].content['application/json'].schema.properties.currentLocalDateTime)
 assert.ok(actionSchema.paths['/api/gpt-context'].get.responses['200'].content['application/json'].schema.properties.taskWorkLogs)
 assert.equal(actionSchema.paths['/api/gpt-context'].get['x-openai-isConsequential'], false)
+assert.deepEqual(actionSchema.paths['/api/gpt-context'].get.security, [{ GptActionBearer: [] }])
 assert.equal(actionSchema.paths['/api/gpt-inbox'].post['x-openai-isConsequential'], false)
+assert.deepEqual(actionSchema.paths['/api/gpt-inbox'].post.security, [{ GptActionBearer: [] }])
 assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /real future tasks or events/)
 assert.match(actionSchema.paths['/api/gpt-inbox'].post.description, /getLadyButlerContext/)
 assert.ok(actionSchema.paths['/api/gpt-inbox'].post.description.length <= 300)
@@ -394,6 +412,7 @@ assert.match(gptInstructions, /currentLocalDateTime/)
 assert.match(gptInstructions, /締切がなくても/)
 assert.match(gptInstructions, /開始日と開始時刻/)
 assert.match(gptInstructions, /参照用データ/)
+assert.match(gptInstructions, /GPT_ACTION_TOKEN/)
 
 const privacyPage = await readFile(new URL('../public/privacy.html', import.meta.url), 'utf8')
 assert.match(privacyPage, /プライバシーとデータの扱い/)
