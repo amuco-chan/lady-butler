@@ -1,0 +1,172 @@
+/* Mobile line-break polish */
+.settings-start-guide{
+  padding:22px 30px 24px;
+  background:linear-gradient(135deg,#fbf8f1,#fff);
+  border-bottom:1px solid var(--line);
+}
+
+.settings-start-guide>span{
+  font-size:8px;
+  letter-spacing:.18em;
+  color:#9c7948;
+  font-weight:700;
+}
+
+.settings-start-guide h2{
+  margin:5px 0 13px;
+  color:#263843;
+  font:16px 'Noto Serif JP',serif;
+}
+
+.settings-start-guide ol{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:9px;
+  margin:0;
+  padding:0;
+  list-style:none!important;
+  list-style-position:outside;
+}
+
+.settings-start-guide li{
+  display:grid;
+  grid-template-columns:25px minmax(0,1fr);
+  gap:9px;
+  align-items:start;
+  padding:11px;
+  background:#fff;
+  border:1px solid #e2dace;
+  list-style:none!important;
+}
+
+.settings-start-guide li::marker{
+  content:""!important;
+}
+
+.settings-start-guide b{
+  width:25px;
+  height:25px;
+  display:grid;
+  place-items:center;
+  border-radius:50%;
+  background:#172a3a;
+  color:#fff;
+  font-size:9px;
+}
+
+.settings-start-guide p{
+  margin:1px 0 0!important;
+  color:#56605b!important;
+  font-size:9px!important;
+  line-height:1.65!important;
+}
+
+.page-heading h1,
+.butler-callout h2,
+.command-summary h2,
+.section-title h2,
+.settings-start-guide h2,
+.settings-section h2,
+.calendar-hero-main h2,
+.week-brief h3,
+.week-next strong,
+.diary-form-head h2,
+.modal-head h2{
+  line-break:strict;
+  overflow-wrap:normal;
+  text-wrap:balance;
+  word-break:keep-all;
+}
+
+.page-heading p,
+.butler-callout p,
+.command-summary p,
+.settings-section p,
+.settings-start-guide p,
+.sync-explain-card li p,
+.sync-data-map small,
+.sync-safe-note p,
+.gpt-key-map p,
+.gpt-troubleshoot p,
+.gpt-behavior-note span,
+.calendar-hero-main p,
+.calendar-guide p,
+.diary-ai p,
+.modal-help{
+  line-break:strict;
+  overflow-wrap:break-word;
+  word-break:normal;
+}
+
+.gpt-link-box code,
+.sync-explain-card li b,
+.sync-key-tools small b,
+.settings-start-guide p,
+.gpt-key-map strong{
+  overflow-wrap:anywhere;
+}
+
+.mobile-tabbar button span,
+.topbar .gpt-launch,
+.quick-add,
+.sync-state strong,
+.sync-actions button,
+.sync-key-tools button,
+.mood-buttons button span,
+.task-type-strip span,
+.time-chip,
+.timer-button,
+.timer-discard{
+  white-space:nowrap;
+}
+
+@media(max-width:760px){
+  .page-heading h1{
+    font-size:22px;
+    line-height:1.58;
+    max-width:15.5em;
+  }
+
+  .settings-start-guide{
+    padding:20px;
+  }
+
+  .settings-start-guide h2{
+    font-size:17px;
+    line-height:1.55;
+  }
+
+  .settings-start-guide ol{
+    grid-template-columns:1fr;
+    gap:8px;
+  }
+
+  .settings-start-guide li{
+    grid-template-columns:25px minmax(0,1fr);
+    padding:11px;
+  }
+
+  .sync-actions button,
+  .sync-key-tools button,
+  .backup-actions button,
+  .backup-actions label,
+  .danger-actions button{
+    min-height:38px;
+    text-align:center;
+  }
+}
+
+@media(max-width:420px){
+  .page-heading h1{
+    font-size:21px;
+    max-width:14.5em;
+  }
+
+  .section-title{
+    gap:12px;
+  }
+
+  .section-title h2{
+    line-height:1.45;
+  }
+}
