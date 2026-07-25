@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task, TaskType, TaskWorkLog } from './types'
 import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, isTaskOpenToday, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskActualMinutes, taskDisplayStatus, taskKind, taskLimitForSchedule, taskProgressToday, taskRemainingMinutes, toLocalDateTimeValue, useStoredState, workLogMinutes } from './lib'
+import { parseEmailDeadlineCandidates } from './email-deadlines'
 
 const nav: { id: Page; label: string; icon: typeof Home }[] = [
   { id: 'home', label: 'ホーム', icon: Home }, { id: 'tasks', label: 'やること', icon: CheckCircle2 },
@@ -254,6 +255,19 @@ export default function App() {
       duplicates: automatic.length - acceptedTasks.length - acceptedEvents.length,
     }
   }, [events, setEvents, setGptInbox, setTasks, tasks])
+
+  const importEmailCandidates = useCallback((items: GptInboxItem[]) => {
+    if (!items.length) {
+      setImportNotice('メールから締切候補を見つけられませんでした。件名と本文を少し長めに貼ると拾いやすくなります。')
+      return
+    }
+    const result = ingestGptItems(items)
+    setImportNotice(result.needsReview
+      ? `メールから${result.needsReview}件の候補を見つけました。確認してからやることに追加してください。`
+      : result.added
+        ? `メールから${result.added}件をやることに追加しました。`
+        : 'メール候補はすでに追加済みでした。')
+  }, [ingestGptItems])
 
   const syncGptInbox = useCallback(async (silent = false) => {
     const token = syncToken.trim()
@@ -622,7 +636,7 @@ export default function App() {
       <div className="page-wrap">
         {page === 'home' && <InstallPrompt/>}
         {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} taskWorkLogs={taskWorkLogs} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
-        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime} logFocus={logFocusTime}/>}
+        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} gptInbox={gptInbox} importNotice={importNotice} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime} logFocus={logFocusTime} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem} importEmailCandidates={importEmailCandidates}/>}
         {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
         {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage
@@ -666,6 +680,16 @@ function InstallPrompt() {
 
 function PageHeading({ eyebrow, title, children, action }: { eyebrow?: string; title: string; children?: React.ReactNode; action?: React.ReactNode }) {
   return <div className="page-heading"><div>{eyebrow && <span>{eyebrow}</span>}<h1>{title}</h1>{children && <p>{children}</p>}</div>{action}</div>
+}
+
+function InboxReviewCard({ gptInbox, importNotice, acceptInboxItem, reviewInboxItem, dismissInboxItem, eyebrow = 'GPT AUTO SYNC' }: { gptInbox: GptInboxItem[]; importNotice: string; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void; eyebrow?: string }) {
+  if (!importNotice && gptInbox.length === 0) return null
+  return <section className="card gpt-inbox-card"><div className="section-title"><div><span>{eyebrow}</span><h2>{gptInbox.length ? '少しだけ確認してください' : '自動で反映しました'}</h2></div><div className="inbox-title-actions"><small>{gptInbox.length ? `要確認 ${gptInbox.length}件` : '操作不要'}</small></div></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
+    const eventTime = item.type === 'event' ? formatEventTime(item) : null
+    const taskDeadline = item.type === 'task' ? formatDeadline(item.deadline) : null
+    const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0 || (item.type === 'event' && item.startIsFallback)
+    return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {item.startIsFallback ? '開始日時未設定' : `${eventTime?.label} ${eventTime?.date} ${eventTime?.time}`}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {item.deadlineIsFallback ? '締切未設定' : `${taskDeadline?.label} ${taskDeadline?.date}`} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => needsCheck ? reviewInboxItem(item) : acceptInboxItem(item)}>{needsCheck ? <Edit3 size={14}/> : <Plus size={14}/>} {needsCheck ? '確認して追加' : item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
+  })}</div> : <p className="inbox-empty">確認が必要なものはありません。</p>}</section>
 }
 
 function HomePage({ name, settings, tasks, taskWorkLogs, events, moodLogs, gptInbox, importNotice, go, acceptInboxItem, reviewInboxItem, dismissInboxItem }: { name: string; settings: Settings; tasks: Task[]; taskWorkLogs: TaskWorkLog[]; events: CalendarEvent[]; moodLogs: MoodLog[]; gptInbox: GptInboxItem[]; importNotice: string; go: (p: Page) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void }) {
@@ -712,12 +736,7 @@ function HomePage({ name, settings, tasks, taskWorkLogs, events, moodLogs, gptIn
   const date = new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' }).format(new Date())
   return <>
     <PageHeading eyebrow={date} title={greeting.title}>{greeting.subtitle}</PageHeading>
-    {(importNotice || gptInbox.length > 0) && <section className="card gpt-inbox-card"><div className="section-title"><div><span>GPT AUTO SYNC</span><h2>{gptInbox.length ? '少しだけ確認してください' : '自動で反映しました'}</h2></div><div className="inbox-title-actions"><small>{gptInbox.length ? `要確認 ${gptInbox.length}件` : '操作不要'}</small></div></div>{importNotice && <p className="inbox-notice">{importNotice}</p>}{gptInbox.length ? <div className="inbox-list">{gptInbox.map(item => {
-      const eventTime = item.type === 'event' ? formatEventTime(item) : null
-      const taskDeadline = item.type === 'task' ? formatDeadline(item.deadline) : null
-      const needsCheck = item.confidence === 'low' || (item.ambiguities?.length ?? 0) > 0 || (item.type === 'event' && item.startIsFallback)
-      return <article key={item.id}><div className="inbox-icon"><Inbox size={17}/></div><div><strong>{item.title}</strong>{item.type === 'event' ? <span>予定 ・ {item.startIsFallback ? '開始日時未設定' : `${eventTime?.label} ${eventTime?.date} ${eventTime?.time}`}{item.location ? ` ・ ${item.location}` : ''}</span> : <span>{taskCategoryLabel(item.category)} ・ {item.deadlineIsFallback ? '締切未設定' : `${taskDeadline?.label} ${taskDeadline?.date}`} ・ 優先度{item.priority}</span>}{needsCheck && <div className="inbox-flags"><b>要確認</b>{item.ambiguities?.map(note => <i key={note}>{note}</i>)}</div>}{item.memo && <p>{item.memo}</p>}</div><div className="inbox-actions"><button className="primary" onClick={() => needsCheck ? reviewInboxItem(item) : acceptInboxItem(item)}>{needsCheck ? <Edit3 size={14}/> : <Plus size={14}/>} {needsCheck ? '確認して追加' : item.type === 'event' ? '予定に追加' : 'やることに追加'}</button><button onClick={() => dismissInboxItem(item.id)}>見送る</button></div></article>
-    })}</div> : <p className="inbox-empty">確認が必要なものはありません。</p>}</section>}
+    <InboxReviewCard gptInbox={gptInbox} importNotice={importNotice} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>
     <section className="card command-card"><div className="section-title"><div><span>TODAY'S PLAN</span><h2>今日のご案内</h2></div><button className="text-button" onClick={() => go('calendar')}>予定を見る <ArrowRight size={15}/></button></div><div className="command-grid"><div className="command-summary"><span>BUTLER'S PLAN</span><h2>{commandTitle}</h2><p>{commandBody}</p><div className="command-pills"><b>気分 {moodLabel}</b><b>所要目安 {workMinutes}分</b><b>今日の集中 {todayLoggedMinutes}分</b><b>今日の予定 {todayEvents.length}件</b><b className={`load-${scheduleLoad}`}>予定負荷 {loadLabel}</b></div></div><div className="command-lanes"><div className="command-lane"><div><span>SCHEDULE</span><strong>今日の予定</strong></div>{todayEvents.length ? todayEvents.slice(0, 4).map(event => <CommandEvent key={event.id} event={event}/>) : <p className="command-empty">今日の予定はまだありません。移動や休憩を入れる余白として使えます。</p>}</div><div className="command-lane"><div><span>TODO</span><strong>今日の一手</strong></div>{plan.today.length ? <>{plan.today.slice(0, 4).map((task, i) => <CommandTask key={task.id} task={task} index={i}/>)}{deferredBySchedule > 0 && <p className="command-note">予定量に合わせて、{deferredBySchedule}件は明日以降候補へ回しました。</p>}</> : <p className="command-empty">急ぎのやることはありません。明日の準備を一つだけ。</p>}</div></div></div></section>
     <WeekPlanCard mode={weekMode} advice={weekAdvice} tasks={weekTasks} events={weekEvents} minutes={weekMinutes} lowMoodDays={lowMoodDays} go={go}/>
   </>
@@ -753,7 +772,20 @@ function WeekPlanCard({ mode, advice, tasks, events, minutes, lowMoodDays, go }:
   </section>
 }
 
-function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime, logFocus }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number, details?: Pick<TaskWorkLog, 'memo' | 'startedAt' | 'endedAt'>) => void }) {
+function EmailDeadlineImporter({ importEmailCandidates }: { importEmailCandidates: (items: GptInboxItem[]) => void }) {
+  const [emailText, setEmailText] = useState('')
+  const [message, setMessage] = useState('')
+  const preview = useMemo(() => parseEmailDeadlineCandidates(emailText), [emailText])
+  const submit = () => {
+    const items = parseEmailDeadlineCandidates(emailText)
+    importEmailCandidates(items)
+    setMessage(items.length ? `${items.length}件の候補を確認待ちへ送りました。` : '締切候補を見つけられませんでした。')
+    if (items.length) setEmailText('')
+  }
+  return <section className="card email-deadline-card"><div className="email-deadline-grid"><div className="email-deadline-copy"><span>MAIL DEADLINE</span><h2>メールから締切候補</h2><p>締切や提出期限のメールを貼ると、やること候補として拾います。追加前に必ず確認できます。</p><div className="email-deadline-note"><Inbox size={15}/><small>本文はこの端末で解析します。自動でメールボックスを読みに行く機能ではありません。</small></div></div><div className="email-deadline-form"><textarea className="email-deadline-textarea" value={emailText} onChange={event => { setEmailText(event.target.value); setMessage('') }} placeholder={'件名: 心理学レポート提出\n提出期限: 7/30 23:59\n本文をここに貼ってください'}/><div className="email-deadline-actions"><button className="primary" type="button" onClick={submit} disabled={!emailText.trim()}><Plus size={15}/>候補に入れる</button>{message && <small role="status">{message}</small>}</div>{preview.length > 0 && <div className="email-deadline-preview" aria-label="メール解析プレビュー"><span>見つかった候補</span>{preview.map(item => item.type === 'task' ? <article key={item.id}><strong>{item.title}</strong><small>{item.deadline ? `${formatDeadline(item.deadline).label} ${formatDeadline(item.deadline).date}` : '締切日を確認'} ・ {item.ambiguities?.join(' / ')}</small></article> : null)}</div>}</div></div></section>
+}
+
+function TasksPage({ tasks, taskWorkLogs, gptInbox, importNotice, edit, remove, complete, logTime, logFocus, acceptInboxItem, reviewInboxItem, dismissInboxItem, importEmailCandidates }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; gptInbox: GptInboxItem[]; importNotice: string; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number, details?: Pick<TaskWorkLog, 'memo' | 'startedAt' | 'endedAt'>) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void; importEmailCandidates: (items: GptInboxItem[]) => void }) {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('未完了'), [sort, setSort] = useState('締切が近い順')
   const [typeFilter, setTypeFilter] = useState<'すべて' | '毎日' | '臨時'>('すべて')
   const [focusMinutes, setFocusMinutes] = useStoredState('lady.focusMinutes', '5'), [timerStartedAt, setTimerStartedAt] = useStoredState<number | null>('lady.focusTimerStartedAt', null), [nowTick, setNowTick] = useState(Date.now())
@@ -803,6 +835,8 @@ function TasksPage({ tasks, taskWorkLogs, edit, remove, complete, logTime, logFo
   ]
   return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了があります。{dailySummary}、臨時は{temporaryOpen}件。今日の集中は{todayLogged}分です。</></PageHeading>
     <section className={`card focus-quick-card ${timerStartedAt ? 'timer-running' : ''}`}><div className="focus-quick-copy"><span>FOCUS RECORDER</span><h2>{timerStartedAt ? '集中を計測中' : '集中だけ記録'}</h2><p>{timerStartedAt ? `${timerStartedLabel}から計測しています。終わったら停止して記録しましょう。` : 'タスクを選ばずに、分単位の記録やタイマー計測ができます。'}</p></div><div className="focus-quick-actions"><div className="focus-action-group"><span>すぐ記録</span><div><button className="time-chip" type="button" onClick={() => logFocus(1)} title="1分集中を記録" aria-label="タスクを指定せずに1分集中を記録">+1分</button><button className="time-chip" type="button" onClick={() => logFocus(10)} title="10分集中を記録" aria-label="タスクを指定せずに10分集中を記録">+10分</button><button className="time-chip" type="button" onClick={() => logFocus(25)} title="25分集中を記録" aria-label="タスクを指定せずに25分集中を記録">+25分</button></div></div><div className="focus-action-group focus-custom-group"><span>分を指定</span><div><label className="focus-minute-input"><input type="number" min="1" max="720" step="1" aria-label="記録する集中時間の分数" value={focusMinutes} onChange={e => setFocusMinutes(e.target.value)}/><i>分</i></label><button className="time-chip custom-focus" type="button" onClick={recordManualFocus} disabled={manualFocusMinutes <= 0}>記録</button></div></div><div className="focus-action-group focus-timer-group"><span>タイマー</span><div><button className={`timer-button ${timerStartedAt ? 'running' : ''}`} type="button" aria-pressed={!!timerStartedAt} onClick={() => timerStartedAt ? stopFocusTimer() : setTimerStartedAt(Date.now())}>{timerStartedAt ? '停止して記録' : '計測開始'}</button>{timerStartedAt && <button className="timer-discard" type="button" onClick={discardFocusTimer}>破棄</button>}</div></div><small>{timerStartedAt ? `計測中 ${timerLabel} ・ ページを離れても継続` : `今日 ${todayLogged}分 ・ 合計 ${loggedTotal}分`}</small></div></section>
+    <EmailDeadlineImporter importEmailCandidates={importEmailCandidates}/>
+    <InboxReviewCard gptInbox={gptInbox} importNotice={importNotice} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem} eyebrow="MAIL & GPT REVIEW"/>
     <div className="task-type-strip" aria-label="タスクの種類">{typeCards.map(item => <button key={item.label} className={typeFilter === item.label ? 'active' : ''} onClick={() => setTypeFilter(item.label)}><span>{item.label}</span><b>{item.value}</b><small>{item.note}</small></button>)}</div>
     <div className="toolbar"><label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="やることを検索"/></label><div className="segmented">{['未完了','すべて','進行中','完了'].map(v => <button className={filter === v ? 'active' : ''} onClick={() => setFilter(v)} key={v}>{v}</button>)}</div><label className="select-wrap"><select value={sort} onChange={e => setSort(e.target.value)}><option>締切が近い順</option><option>優先度順</option></select><ChevronDown size={15}/></label></div>
     <section className="card task-table"><div className="table-head"><span>やること</span><span>締切</span><span>進捗・時間</span><span>優先度</span><span>状態</span><span>記録</span></div>{shown.map(t => {
