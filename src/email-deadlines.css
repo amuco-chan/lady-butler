@@ -58,6 +58,133 @@
   gap: .75rem;
 }
 
+.gmail-status-pill {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem;
+  margin-top: 1rem;
+  border: 1px solid rgba(16, 31, 58, .1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .68);
+  padding: .55rem .75rem;
+  color: var(--navy);
+}
+
+.gmail-status-pill svg {
+  color: var(--gold);
+}
+
+.gmail-status-pill strong {
+  font-size: .8rem;
+}
+
+.gmail-status-pill span {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: .72rem;
+  letter-spacing: 0;
+}
+
+.gmail-connected {
+  border-color: rgba(85, 116, 97, .28);
+  background: rgba(241, 246, 243, .82);
+}
+
+.gmail-unconfigured,
+.gmail-invalid,
+.gmail-error {
+  border-color: rgba(173, 137, 80, .34);
+  background: rgba(248, 244, 235, .86);
+}
+
+.gmail-action-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .65rem;
+  align-items: center;
+  border: 1px solid rgba(16, 31, 58, .08);
+  border-radius: 1.05rem;
+  background: rgba(255, 255, 255, .58);
+  padding: .8rem;
+}
+
+.gmail-action-panel button {
+  border: 1px solid rgba(16, 31, 58, .12);
+  border-radius: .65rem;
+  background: rgba(255, 255, 255, .88);
+  color: var(--navy);
+  padding: .7rem .9rem;
+  font-size: .8rem;
+}
+
+.gmail-action-panel button.primary {
+  border-color: var(--navy);
+  background: var(--navy);
+  color: white;
+}
+
+.gmail-action-panel button:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.gmail-message {
+  display: block;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.gmail-setup-note {
+  display: grid;
+  gap: .45rem;
+  border: 1px solid rgba(173, 137, 80, .2);
+  border-radius: 1rem;
+  background: rgba(255, 250, 240, .72);
+  padding: .85rem;
+}
+
+.gmail-setup-note strong {
+  color: var(--navy);
+  font-size: .85rem;
+}
+
+.gmail-setup-note p,
+.gmail-setup-note small {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.gmail-setup-note code {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid rgba(16, 31, 58, .08);
+  border-radius: .55rem;
+  background: rgba(255, 255, 255, .8);
+  padding: .55rem;
+  color: var(--navy);
+  font-size: .74rem;
+}
+
+.email-fallback {
+  border-top: 1px solid rgba(16, 31, 58, .08);
+  padding-top: .65rem;
+}
+
+.email-fallback summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+.email-fallback[open] summary {
+  margin-bottom: .65rem;
+  color: var(--navy);
+}
+
 .email-deadline-textarea {
   width: 100%;
   min-height: 9.5rem;
@@ -130,5 +257,13 @@
   .email-deadline-textarea {
     min-height: 8rem;
     border-radius: .95rem;
+  }
+
+  .gmail-action-panel {
+    display: grid;
+  }
+
+  .gmail-action-panel button {
+    justify-content: center;
   }
 }

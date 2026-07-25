@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
+import { Archive, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Circle, Clock3, Cloud, Copy, Database, Download, Edit3, ExternalLink, Home, Inbox, Mail, MapPin, Menu, NotebookPen, Plus, RefreshCw, Repeat2, Search, Settings as SettingsIcon, Sparkles, Trash2, Upload, X } from 'lucide-react'
 import type { CalendarEvent, DiaryEntry, GptInboxItem, Mood, MoodLog, Page, Progress, Settings, Status, Task, TaskType, TaskWorkLog } from './types'
 import { butlerGreeting, butlerNotification, butlerPlanTitle, butlerScheduleAdvice, butlerWeekAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, isTaskOpenToday, localDate, makeDiaryComment, moodInfo, moodOptions, normalizeGptInboxPayload, parseGptImportHash, parseIcsCalendar, rankedTasks, recurrenceLabel, sampleTasks, scheduleLoadFor, taskActualMinutes, taskDisplayStatus, taskKind, taskLimitForSchedule, taskProgressToday, taskRemainingMinutes, toLocalDateTimeValue, useStoredState, workLogMinutes } from './lib'
 import { parseEmailDeadlineCandidates } from './email-deadlines'
@@ -636,7 +636,7 @@ export default function App() {
       <div className="page-wrap">
         {page === 'home' && <InstallPrompt/>}
         {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} taskWorkLogs={taskWorkLogs} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
-        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} gptInbox={gptInbox} importNotice={importNotice} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime} logFocus={logFocusTime} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem} importEmailCandidates={importEmailCandidates}/>}
+        {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} syncToken={syncToken} gptInbox={gptInbox} importNotice={importNotice} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime} logFocus={logFocusTime} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem} importEmailCandidates={importEmailCandidates}/>}
         {page === 'calendar' && <CalendarPage events={events} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
         {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage
@@ -772,20 +772,154 @@ function WeekPlanCard({ mode, advice, tasks, events, minutes, lowMoodDays, go }:
   </section>
 }
 
-function EmailDeadlineImporter({ importEmailCandidates }: { importEmailCandidates: (items: GptInboxItem[]) => void }) {
+type GmailConnectStatus = 'idle' | 'checking' | 'connected' | 'disconnected' | 'unconfigured' | 'invalid' | 'scanning' | 'error'
+
+function EmailDeadlineImporter({ syncToken, importEmailCandidates }: { syncToken: string; importEmailCandidates: (items: GptInboxItem[]) => void }) {
   const [emailText, setEmailText] = useState('')
   const [message, setMessage] = useState('')
+  const [gmailStatus, setGmailStatus] = useState<GmailConnectStatus>('idle')
+  const [gmailEmail, setGmailEmail] = useState('')
+  const [setupNeeds, setSetupNeeds] = useState<string[]>([])
+  const [redirectUri, setRedirectUri] = useState('')
   const preview = useMemo(() => parseEmailDeadlineCandidates(emailText), [emailText])
+  const authHeaders = useCallback(() => ({ Authorization: `Bearer ${syncToken.trim()}` }), [syncToken])
+  const checkGmailStatus = useCallback(async (silent = false) => {
+    const token = syncToken.trim()
+    if (!token) {
+      setGmailStatus('disconnected')
+      setMessage('先に設定で「同期キーを作る」を押すと、Gmail連携も使えるようになります。')
+      return
+    }
+    if (!silent) setGmailStatus('checking')
+    try {
+      const response = await fetch('/api/gmail-auth', { headers: authHeaders(), cache: 'no-store' })
+      const payload = await response.json().catch(() => ({}))
+      setSetupNeeds(Array.isArray(payload.needs) ? payload.needs : [])
+      setRedirectUri(payload.redirectUri || '')
+      if (response.status === 401) {
+        setGmailStatus('invalid')
+        setMessage('共通同期キーが一致していません。設定のPC・スマホ同期を確認してください。')
+        return
+      }
+      if (!response.ok) throw new Error(payload.error || 'gmail status failed')
+      if (!payload.configured) {
+        setGmailStatus('unconfigured')
+        setMessage('Gmail連携の準備がまだです。下の設定メモをVercelに入れれば使えます。')
+        return
+      }
+      setGmailEmail(payload.emailAddress || '')
+      setGmailStatus(payload.connected ? 'connected' : 'disconnected')
+      if (!silent) setMessage(payload.connected ? 'Gmail接続済みです。最近のメールを確認できます。' : 'Gmailを一度接続すると、次から貼らずに確認できます。')
+    } catch {
+      setGmailStatus('error')
+      if (!silent) setMessage('Gmail連携の状態を確認できませんでした。少し待ってからもう一度お試しください。')
+    }
+  }, [authHeaders, syncToken])
+  useEffect(() => { checkGmailStatus(true) }, [checkGmailStatus])
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const gmail = params.get('gmail')
+    if (gmail === 'connected') setMessage('Gmailを接続しました。これでメール確認ボタンが使えます。')
+    if (gmail === 'error') setMessage('Gmail接続が途中で止まりました。もう一度「Gmailを接続」を押してください。')
+  }, [])
+  const connectGmail = async () => {
+    const token = syncToken.trim()
+    if (!token) {
+      setMessage('まず設定で「同期キーを作る」を押してください。Gmail連携の本人確認にも使います。')
+      return
+    }
+    setGmailStatus('checking')
+    setMessage('')
+    try {
+      const response = await fetch('/api/gmail-auth', { method: 'POST', headers: authHeaders() })
+      const payload = await response.json().catch(() => ({}))
+      setSetupNeeds(Array.isArray(payload.needs) ? payload.needs : [])
+      setRedirectUri(payload.redirectUri || '')
+      if (response.status === 503) {
+        setGmailStatus('unconfigured')
+        setMessage('Gmail連携の準備がまだです。必要な設定をVercelに入れると接続できます。')
+        return
+      }
+      if (response.status === 401) {
+        setGmailStatus('invalid')
+        setMessage('共通同期キーが一致していません。設定のPC・スマホ同期を確認してください。')
+        return
+      }
+      if (!response.ok || !payload.url) throw new Error(payload.error || 'gmail auth failed')
+      location.href = payload.url
+    } catch {
+      setGmailStatus('error')
+      setMessage('Gmail接続を開始できませんでした。少し待ってからもう一度お試しください。')
+    }
+  }
+  const scanGmail = async () => {
+    const token = syncToken.trim()
+    if (!token) {
+      setMessage('まず設定で「同期キーを作る」を押してください。')
+      return
+    }
+    setGmailStatus('scanning')
+    setMessage('最近のメールから締切候補を探しています。少しだけお待ちください。')
+    try {
+      const response = await fetch('/api/gmail-deadlines', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ days: 30, maxResults: 20 }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (response.status === 409) {
+        setGmailStatus('disconnected')
+        setMessage('Gmailがまだ接続されていません。先に「Gmailを接続」を押してください。')
+        return
+      }
+      if (response.status === 401) {
+        setGmailStatus('invalid')
+        setMessage('共通同期キーが一致していません。設定のPC・スマホ同期を確認してください。')
+        return
+      }
+      if (!response.ok) throw new Error(payload.error || 'gmail scan failed')
+      const items = normalizeGptInboxPayload({ items: payload.items })
+      importEmailCandidates(items)
+      setGmailStatus('connected')
+      setGmailEmail(payload.connectedAs || gmailEmail)
+      setMessage(items.length ? `Gmailから${items.length}件の締切候補を見つけました。下で確認して追加できます。` : `最近${payload.days || 30}日分を見ましたが、締切候補は見つかりませんでした。`)
+    } catch {
+      setGmailStatus('error')
+      setMessage('Gmailの確認に失敗しました。接続が切れている場合は、もう一度接続してください。')
+    }
+  }
+  const disconnectGmail = async () => {
+    if (!confirm('Gmail連携を解除しますか？Lady Butler内のタスクや日記は消えません。')) return
+    setGmailStatus('checking')
+    try {
+      await fetch('/api/gmail-auth', { method: 'DELETE', headers: authHeaders() })
+      setGmailStatus('disconnected')
+      setGmailEmail('')
+      setMessage('Gmail連携を解除しました。')
+    } catch {
+      setGmailStatus('error')
+      setMessage('Gmail連携を解除できませんでした。少し待ってからもう一度お試しください。')
+    }
+  }
   const submit = () => {
     const items = parseEmailDeadlineCandidates(emailText)
     importEmailCandidates(items)
     setMessage(items.length ? `${items.length}件の候補を確認待ちへ送りました。` : '締切候補を見つけられませんでした。')
     if (items.length) setEmailText('')
   }
-  return <section className="card email-deadline-card"><div className="email-deadline-grid"><div className="email-deadline-copy"><span>MAIL DEADLINE</span><h2>メールから締切候補</h2><p>締切や提出期限のメールを貼ると、やること候補として拾います。追加前に必ず確認できます。</p><div className="email-deadline-note"><Inbox size={15}/><small>本文はこの端末で解析します。自動でメールボックスを読みに行く機能ではありません。</small></div></div><div className="email-deadline-form"><textarea className="email-deadline-textarea" value={emailText} onChange={event => { setEmailText(event.target.value); setMessage('') }} placeholder={'件名: 心理学レポート提出\n提出期限: 7/30 23:59\n本文をここに貼ってください'}/><div className="email-deadline-actions"><button className="primary" type="button" onClick={submit} disabled={!emailText.trim()}><Plus size={15}/>候補に入れる</button>{message && <small role="status">{message}</small>}</div>{preview.length > 0 && <div className="email-deadline-preview" aria-label="メール解析プレビュー"><span>見つかった候補</span>{preview.map(item => item.type === 'task' ? <article key={item.id}><strong>{item.title}</strong><small>{item.deadline ? `${formatDeadline(item.deadline).label} ${formatDeadline(item.deadline).date}` : '締切日を確認'} ・ {item.ambiguities?.join(' / ')}</small></article> : null)}</div>}</div></div></section>
+  const connected = gmailStatus === 'connected' || gmailStatus === 'scanning'
+  const busy = gmailStatus === 'checking' || gmailStatus === 'scanning'
+  const gmailStatusLabel = gmailStatus === 'scanning' ? 'メール確認中'
+    : gmailStatus === 'connected' ? 'Gmail接続済み'
+      : gmailStatus === 'unconfigured' ? 'Gmail設定待ち'
+        : gmailStatus === 'invalid' ? '同期キーを確認'
+          : gmailStatus === 'checking' ? '接続確認中'
+            : 'Gmail未接続'
+  const setupText = setupNeeds.length ? `必要な環境変数：${setupNeeds.join(' / ')}` : 'Google CloudでGmail APIを有効にし、OAuthのリダイレクトURIを登録します。'
+  return <section className="card email-deadline-card"><div className="email-deadline-grid"><div className="email-deadline-copy"><span>MAIL DEADLINE</span><h2>Gmailから締切候補</h2><p>メール本文を貼らなくても、最近のGmailから締切・提出・返信期限らしいものだけ拾います。追加前に必ず確認できます。</p><div className={`gmail-status-pill gmail-${gmailStatus}`}><Mail size={15}/><strong>{gmailStatusLabel}</strong>{gmailEmail && <span>{gmailEmail}</span>}</div><div className="email-deadline-note"><Inbox size={15}/><small>読み取り専用です。メールを送信・削除せず、候補の本文も保存しません。見つけた候補だけ確認待ちへ送ります。</small></div></div><div className="email-deadline-form"><div className="gmail-action-panel"><button className="primary" type="button" onClick={scanGmail} disabled={!connected || busy}><RefreshCw size={15}/>{gmailStatus === 'scanning' ? '確認中…' : 'Gmailを確認'}</button><button type="button" onClick={connectGmail} disabled={busy}>{connected ? '再接続' : 'Gmailを接続'}</button>{connected && <button type="button" onClick={disconnectGmail} disabled={busy}>接続解除</button>}</div>{message && <small className="gmail-message" role="status">{message}</small>}{gmailStatus === 'unconfigured' && <div className="gmail-setup-note"><strong>初回だけ必要な準備</strong><p>{setupText}</p>{redirectUri && <code>{redirectUri}</code>}<small>ここまで入れれば、レディは毎回メール本文を貼らなくて済みます。</small></div>}<details className="email-fallback"><summary>予備：メール文を貼って候補にする</summary><textarea className="email-deadline-textarea" value={emailText} onChange={event => { setEmailText(event.target.value); setMessage('') }} placeholder={'件名: 心理学レポート提出\n提出期限: 7/30 23:59\nどうしても自動確認できない時だけ、ここに貼ります'}/><div className="email-deadline-actions"><button className="primary" type="button" onClick={submit} disabled={!emailText.trim()}><Plus size={15}/>候補に入れる</button></div>{preview.length > 0 && <div className="email-deadline-preview" aria-label="メール解析プレビュー"><span>見つかった候補</span>{preview.map(item => item.type === 'task' ? <article key={item.id}><strong>{item.title}</strong><small>{item.deadline ? `${formatDeadline(item.deadline).label} ${formatDeadline(item.deadline).date}` : '締切日を確認'} ・ {item.ambiguities?.join(' / ')}</small></article> : null)}</div>}</details></div></div></section>
 }
 
-function TasksPage({ tasks, taskWorkLogs, gptInbox, importNotice, edit, remove, complete, logTime, logFocus, acceptInboxItem, reviewInboxItem, dismissInboxItem, importEmailCandidates }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; gptInbox: GptInboxItem[]; importNotice: string; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number, details?: Pick<TaskWorkLog, 'memo' | 'startedAt' | 'endedAt'>) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void; importEmailCandidates: (items: GptInboxItem[]) => void }) {
+function TasksPage({ tasks, taskWorkLogs, syncToken, gptInbox, importNotice, edit, remove, complete, logTime, logFocus, acceptInboxItem, reviewInboxItem, dismissInboxItem, importEmailCandidates }: { tasks: Task[]; taskWorkLogs: TaskWorkLog[]; syncToken: string; gptInbox: GptInboxItem[]; importNotice: string; edit: (t: Task) => void; remove: (id: string) => void; complete: (id: string) => void; logTime: (id: string, minutes: number) => void; logFocus: (minutes: number, details?: Pick<TaskWorkLog, 'memo' | 'startedAt' | 'endedAt'>) => void; acceptInboxItem: (item: GptInboxItem) => void; reviewInboxItem: (item: GptInboxItem) => void; dismissInboxItem: (id: string) => void; importEmailCandidates: (items: GptInboxItem[]) => void }) {
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('未完了'), [sort, setSort] = useState('締切が近い順')
   const [typeFilter, setTypeFilter] = useState<'すべて' | '毎日' | '臨時'>('すべて')
   const [focusMinutes, setFocusMinutes] = useStoredState('lady.focusMinutes', '5'), [timerStartedAt, setTimerStartedAt] = useStoredState<number | null>('lady.focusTimerStartedAt', null), [nowTick, setNowTick] = useState(Date.now())
@@ -835,7 +969,7 @@ function TasksPage({ tasks, taskWorkLogs, gptInbox, importNotice, edit, remove, 
   ]
   return <><PageHeading eyebrow="TODO" title="やること"><>{openCount}件の未完了があります。{dailySummary}、臨時は{temporaryOpen}件。今日の集中は{todayLogged}分です。</></PageHeading>
     <section className={`card focus-quick-card ${timerStartedAt ? 'timer-running' : ''}`}><div className="focus-quick-copy"><span>FOCUS RECORDER</span><h2>{timerStartedAt ? '集中を計測中' : '集中だけ記録'}</h2><p>{timerStartedAt ? `${timerStartedLabel}から計測しています。終わったら停止して記録しましょう。` : 'タスクを選ばずに、分単位の記録やタイマー計測ができます。'}</p></div><div className="focus-quick-actions"><div className="focus-action-group"><span>すぐ記録</span><div><button className="time-chip" type="button" onClick={() => logFocus(1)} title="1分集中を記録" aria-label="タスクを指定せずに1分集中を記録">+1分</button><button className="time-chip" type="button" onClick={() => logFocus(10)} title="10分集中を記録" aria-label="タスクを指定せずに10分集中を記録">+10分</button><button className="time-chip" type="button" onClick={() => logFocus(25)} title="25分集中を記録" aria-label="タスクを指定せずに25分集中を記録">+25分</button></div></div><div className="focus-action-group focus-custom-group"><span>分を指定</span><div><label className="focus-minute-input"><input type="number" min="1" max="720" step="1" aria-label="記録する集中時間の分数" value={focusMinutes} onChange={e => setFocusMinutes(e.target.value)}/><i>分</i></label><button className="time-chip custom-focus" type="button" onClick={recordManualFocus} disabled={manualFocusMinutes <= 0}>記録</button></div></div><div className="focus-action-group focus-timer-group"><span>タイマー</span><div><button className={`timer-button ${timerStartedAt ? 'running' : ''}`} type="button" aria-pressed={!!timerStartedAt} onClick={() => timerStartedAt ? stopFocusTimer() : setTimerStartedAt(Date.now())}>{timerStartedAt ? '停止して記録' : '計測開始'}</button>{timerStartedAt && <button className="timer-discard" type="button" onClick={discardFocusTimer}>破棄</button>}</div></div><small>{timerStartedAt ? `計測中 ${timerLabel} ・ ページを離れても継続` : `今日 ${todayLogged}分 ・ 合計 ${loggedTotal}分`}</small></div></section>
-    <EmailDeadlineImporter importEmailCandidates={importEmailCandidates}/>
+    <EmailDeadlineImporter syncToken={syncToken} importEmailCandidates={importEmailCandidates}/>
     <InboxReviewCard gptInbox={gptInbox} importNotice={importNotice} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem} eyebrow="MAIL & GPT REVIEW"/>
     <div className="task-type-strip" aria-label="タスクの種類">{typeCards.map(item => <button key={item.label} className={typeFilter === item.label ? 'active' : ''} onClick={() => setTypeFilter(item.label)}><span>{item.label}</span><b>{item.value}</b><small>{item.note}</small></button>)}</div>
     <div className="toolbar"><label className="search"><Search size={18}/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="やることを検索"/></label><div className="segmented">{['未完了','すべて','進行中','完了'].map(v => <button className={filter === v ? 'active' : ''} onClick={() => setFilter(v)} key={v}>{v}</button>)}</div><label className="select-wrap"><select value={sort} onChange={e => setSort(e.target.value)}><option>締切が近い順</option><option>優先度順</option></select><ChevronDown size={15}/></label></div>

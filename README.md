@@ -15,6 +15,7 @@
 - Googleカレンダーから書き出した `.ics` ファイルの読み込み
 - Custom GPTから届いた内容を自動追加し、曖昧なものだけ確認
 - Custom GPTが許可されたタスク・予定・気分・日記を必要時に参照
+- Gmailから締切・提出・返信期限らしいメールを確認し、タスク候補として取り込む
 - 同じ同期キーによるPC・スマートフォン間の自動データ同期
 - PC／スマートフォン対応
 - スマートフォン用の下部タブと、ホーム画面へ追加できるPWA構成
@@ -58,6 +59,23 @@ GPTが課題・買い物などをタスク候補として、面談・授業・�
 Upstashの標準トークンはVercelの環境変数だけに保存し、ブラウザやCustom GPTには登録しません。同期キーそのものはサーバーへ保存せず、照合用のハッシュだけをクラウドに保存します。`SYNC_ACCESS_TOKEN` は手動で固定キーを使いたい時だけ任意で設定できます。GPT用キーはタスク・予定の受信と許可された記録の参照だけに使い、端末同期データの更新権限とは分離します。必要な環境変数名は `.env.example` にあります。
 
 Custom GPTのActions認証に入れるのは、アプリ画面で作る「共通の同期キー」ではなく `GPT_ACTION_TOKEN` です。共通の同期キーはPC・スマホ同期とアプリ内の共有データ診断に使います。
+
+## Gmailから締切候補を拾う
+
+やること画面の「Gmailを確認」から、最近30日分のメールのうち、締切・期限・提出・返信・支払いなどの語があるものだけを確認します。見つかった内容はすぐにはタスク化せず、確認待ちに出してから追加します。メールの送信・削除・ラベル変更は行いません。
+
+初回だけGoogle Cloud側でGmail APIを有効化し、OAuthのWebクライアントを作成します。リダイレクトURIには次を登録します。
+
+`https://lady-butler.vercel.app/api/gmail-callback`
+
+Vercelには次の環境変数を追加します。
+
+- `GMAIL_CLIENT_ID`
+- `GMAIL_CLIENT_SECRET`
+- `GMAIL_REDIRECT_URI`
+- `GMAIL_TOKEN_SECRET`
+
+Gmail連携は読み取り専用スコープ `https://www.googleapis.com/auth/gmail.readonly` だけを使います。取得したメール本文はタスク候補の解析に使い、全文をLady Butlerの保存データへ残しません。
 
 プライバシー方針は `/privacy.html` で公開しています。設定画面からクラウド上の記録、GPT受信待ち、通知先を削除し、同期を解除できます。
 
@@ -104,6 +122,8 @@ iPhoneはSafariの共有メニューから「ホーム画面に追加」、Andro
 - `api/gpt-inbox.js` — Custom GPT候補を確認待ちへ直接同期するAPI
 - `api/gpt-context.js` — Custom GPTへ許可範囲だけ返す読み取り専用API
 - `api/app-data.js` — PC・スマートフォン間のアプリデータ同期
+- `api/gmail-auth.js` / `api/gmail-callback.js` — Gmail読み取り専用OAuth
+- `api/gmail-deadlines.js` — Gmailから締切候補を抽出
 - `public/gpt-action-openapi.json` — Custom GPT Actions用のOpenAPI定義
 
 ## 今後追加できる機能

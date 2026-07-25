@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
+import gmailAuthHandler from '../api/gmail-auth.js'
+import gmailDeadlinesHandler from '../api/gmail-deadlines.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
 import syncTokenHandler from '../api/sync-token.js'
+import { parseDeadlineCandidatesFromEmails } from '../server/email-deadline-parser.js'
 import { parseEmailDeadlineCandidates } from '../src/email-deadlines.ts'
 import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, workLogMinutes } from '../src/lib.ts'
 
@@ -56,6 +59,32 @@ async function callSyncToken(body, options = {}) {
     end(value) { responseBody = String(value) },
   }
   await syncTokenHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callGmailAuth(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'GET', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await gmailAuthHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callGmailDeadlines(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await gmailDeadlinesHandler(req, res)
   return { status: res.statusCode, body: JSON.parse(responseBody) }
 }
 
@@ -189,6 +218,13 @@ const slashEmailDeadline = parseEmailDeadlineCandidates('課題は7/30 18時ま�
 assert.equal(slashEmailDeadline[0].deadline, '2026-07-30T18:00')
 assert.ok(slashEmailDeadline[0].ambiguities?.includes('メール由来の候補を確認'))
 
+const gmailDeadline = parseDeadlineCandidatesFromEmails([{ id: 'gmail-1', subject: '奨学金書類', from: 'office@example.com', snippet: '7/30 17時までに提出してください。', body: '' }], new Date('2026-07-25T09:00:00'))
+assert.equal(gmailDeadline.length, 1)
+assert.equal(gmailDeadline[0].deadline, '2026-07-30T17:00')
+assert.equal(gmailDeadline[0].confidence, 'low')
+assert.ok(gmailDeadline[0].ambiguities?.includes('Gmail由来の候補を確認'))
+assert.equal(canAutoAddInboxItem(gmailDeadline[0]), false)
+
 const preAuthActionToken = process.env.GPT_ACTION_TOKEN
 process.env.GPT_ACTION_TOKEN = 'gpt-action-auth-check-token'
 const unauthenticatedInboxBeforeValidation = await callGptInbox({ items: [{ type: 'task', title: '洗剤を買う' }] })
@@ -241,6 +277,9 @@ const originalSyncToken = process.env.SYNC_ACCESS_TOKEN
 const originalGptActionToken = process.env.GPT_ACTION_TOKEN
 const originalRedisUrl = process.env.UPSTASH_REDIS_REST_URL
 const originalRedisToken = process.env.UPSTASH_REDIS_REST_TOKEN
+const originalGmailClientId = process.env.GMAIL_CLIENT_ID
+const originalGmailClientSecret = process.env.GMAIL_CLIENT_SECRET
+const originalGmailTokenSecret = process.env.GMAIL_TOKEN_SECRET
 const pipelines = []
 const queuedStore = new Map()
 const keyValueStore = new Map()
@@ -298,6 +337,25 @@ const deviceKeyCannotPost = await callGptInbox({ items: [{ type: 'task', title: 
 assert.equal(deviceKeyCannotPost.status, 401)
 
 const cloudHeaders = { authorization: 'Bearer personal-test-token' }
+const gmailMissingConfig = await callGmailAuth(undefined, { method: 'GET', headers: cloudHeaders })
+assert.equal(gmailMissingConfig.status, 200)
+assert.equal(gmailMissingConfig.body.configured, false)
+assert.ok(gmailMissingConfig.body.needs.includes('GMAIL_CLIENT_ID'))
+
+process.env.GMAIL_CLIENT_ID = 'gmail-client-id'
+process.env.GMAIL_CLIENT_SECRET = 'gmail-client-secret'
+process.env.GMAIL_TOKEN_SECRET = 'gmail-token-secret'
+const gmailDisconnected = await callGmailAuth(undefined, { method: 'GET', headers: cloudHeaders })
+assert.equal(gmailDisconnected.status, 200)
+assert.equal(gmailDisconnected.body.configured, true)
+assert.equal(gmailDisconnected.body.connected, false)
+const gmailStart = await callGmailAuth(undefined, { method: 'POST', headers: cloudHeaders })
+assert.equal(gmailStart.status, 200)
+assert.match(gmailStart.body.url, /accounts\.google\.com/)
+assert.match(gmailStart.body.url, /gmail\.readonly/)
+const gmailScanBeforeConnect = await callGmailDeadlines({ days: 30 }, { headers: cloudHeaders })
+assert.equal(gmailScanBeforeConnect.status, 409)
+
 const emptyAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(emptyAppData.status, 200)
 assert.equal(emptyAppData.body.exists, false)
@@ -401,6 +459,9 @@ if (originalSyncToken === undefined) delete process.env.SYNC_ACCESS_TOKEN; else 
 if (originalGptActionToken === undefined) delete process.env.GPT_ACTION_TOKEN; else process.env.GPT_ACTION_TOKEN = originalGptActionToken
 if (originalRedisUrl === undefined) delete process.env.UPSTASH_REDIS_REST_URL; else process.env.UPSTASH_REDIS_REST_URL = originalRedisUrl
 if (originalRedisToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKEN; else process.env.UPSTASH_REDIS_REST_TOKEN = originalRedisToken
+if (originalGmailClientId === undefined) delete process.env.GMAIL_CLIENT_ID; else process.env.GMAIL_CLIENT_ID = originalGmailClientId
+if (originalGmailClientSecret === undefined) delete process.env.GMAIL_CLIENT_SECRET; else process.env.GMAIL_CLIENT_SECRET = originalGmailClientSecret
+if (originalGmailTokenSecret === undefined) delete process.env.GMAIL_TOKEN_SECRET; else process.env.GMAIL_TOKEN_SECRET = originalGmailTokenSecret
 
 const actionSchema = JSON.parse(await readFile(new URL('../public/gpt-action-openapi.json', import.meta.url), 'utf8'))
 const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content['application/json'].schema.properties.items.items
@@ -438,6 +499,7 @@ assert.match(appSource, /最初にやる3つ/)
 assert.match(appSource, /GPT_ACTION_TOKEN/)
 assert.match(appSource, /共通の同期キー/)
 assert.match(appSource, /うまく動かない時/)
+assert.match(appSource, /Gmailを確認/)
 assert.doesNotMatch(appSource, /リンク受信モード/)
 
 const privacyPage = await readFile(new URL('../public/privacy.html', import.meta.url), 'utf8')
