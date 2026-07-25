@@ -4,6 +4,7 @@ import appDataHandler from '../api/app-data.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
 import syncTokenHandler from '../api/sync-token.js'
+import { parseEmailDeadlineCandidates } from '../src/email-deadlines.ts'
 import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, workLogMinutes } from '../src/lib.ts'
 
 async function callGptInbox(body, options = {}) {
@@ -172,6 +173,21 @@ assert.equal(taskWithoutDeadline[0].deadlineIsFallback, true)
 assert.equal(taskWithoutDeadline[0].confidence, 'medium')
 assert.equal(taskWithoutDeadline[0].deadline, '')
 assert.deepEqual(taskWithoutDeadline[0].ambiguities, [])
+
+const emailDeadline = parseEmailDeadlineCandidates('件名: 心理学レポート提出\n提出期限: 2026年7月30日 23:59\n本文を確認して提出してください。', new Date('2026-07-25T09:00:00'))
+assert.equal(emailDeadline.length, 1)
+assert.equal(emailDeadline[0].type, 'task')
+assert.equal(emailDeadline[0].deadline, '2026-07-30T23:59')
+assert.equal(emailDeadline[0].confidence, 'low')
+assert.deepEqual(emailDeadline[0].ambiguities, ['メール由来の候補を確認'])
+assert.equal(canAutoAddInboxItem(emailDeadline[0]), false)
+
+const relativeEmailDeadline = parseEmailDeadlineCandidates('件名: 返信依頼\n明日までに回答してください。', new Date('2026-07-25T09:00:00'))
+assert.equal(relativeEmailDeadline[0].deadline, '2026-07-26T23:59')
+
+const slashEmailDeadline = parseEmailDeadlineCandidates('課題は7/30 18時までに提出してください。', new Date('2026-07-25T09:00:00'))
+assert.equal(slashEmailDeadline[0].deadline, '2026-07-30T18:00')
+assert.ok(slashEmailDeadline[0].ambiguities?.includes('メール由来の候補を確認'))
 
 const preAuthActionToken = process.env.GPT_ACTION_TOKEN
 process.env.GPT_ACTION_TOKEN = 'gpt-action-auth-check-token'
