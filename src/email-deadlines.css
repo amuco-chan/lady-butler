@@ -1,0 +1,134 @@
+.email-deadline-card {
+  overflow: hidden;
+  border-color: rgba(186, 149, 80, .24);
+  background:
+    radial-gradient(circle at top left, rgba(198, 160, 91, .14), transparent 34rem),
+    linear-gradient(135deg, rgba(255, 253, 248, .96), rgba(248, 244, 235, .86));
+}
+
+.email-deadline-grid {
+  display: grid;
+  grid-template-columns: minmax(14rem, .8fr) minmax(18rem, 1.2fr);
+  gap: 1.2rem;
+  align-items: stretch;
+}
+
+.email-deadline-copy span,
+.email-deadline-preview > span {
+  color: var(--muted);
+  font-size: .72rem;
+  font-weight: 800;
+  letter-spacing: .14em;
+}
+
+.email-deadline-copy h2 {
+  margin: .3rem 0 .45rem;
+  color: var(--navy);
+  font-size: clamp(1.25rem, 2vw, 1.8rem);
+}
+
+.email-deadline-copy p {
+  max-width: 34rem;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.email-deadline-note {
+  display: flex;
+  align-items: flex-start;
+  gap: .55rem;
+  margin-top: 1rem;
+  color: var(--navy);
+}
+
+.email-deadline-note svg {
+  flex: 0 0 auto;
+  margin-top: .15rem;
+  color: var(--gold);
+}
+
+.email-deadline-note small {
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.email-deadline-form {
+  display: grid;
+  gap: .75rem;
+}
+
+.email-deadline-textarea {
+  width: 100%;
+  min-height: 9.5rem;
+  resize: vertical;
+  border: 1px solid rgba(16, 31, 58, .12);
+  border-radius: 1.15rem;
+  background: rgba(255, 255, 255, .78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8);
+  padding: 1rem;
+  color: var(--ink, #282b2d);
+  font: inherit;
+  line-height: 1.7;
+}
+
+.email-deadline-textarea:focus {
+  border-color: rgba(186, 149, 80, .55);
+  outline: 3px solid rgba(186, 149, 80, .16);
+}
+
+.email-deadline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .75rem;
+}
+
+.email-deadline-actions small {
+  color: var(--muted);
+}
+
+.email-deadline-preview {
+  display: grid;
+  gap: .55rem;
+  border: 1px solid rgba(16, 31, 58, .08);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, .58);
+  padding: .8rem;
+}
+
+.email-deadline-preview article {
+  display: grid;
+  gap: .25rem;
+  border-top: 1px solid rgba(16, 31, 58, .08);
+  padding-top: .55rem;
+}
+
+.email-deadline-preview article:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.email-deadline-preview strong {
+  color: var(--navy);
+}
+
+.email-deadline-preview small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .email-deadline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .email-deadline-card {
+    border-radius: 1.25rem;
+  }
+
+  .email-deadline-textarea {
+    min-height: 8rem;
+    border-radius: .95rem;
+  }
+}
