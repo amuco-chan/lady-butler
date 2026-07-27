@@ -225,6 +225,27 @@ assert.equal(gmailDeadline[0].confidence, 'low')
 assert.ok(gmailDeadline[0].ambiguities?.includes('Gmail由来の候補を確認'))
 assert.equal(canAutoAddInboxItem(gmailDeadline[0]), false)
 
+const noisyPromoGmail = parseDeadlineCandidatesFromEmails([{
+  id: 'gmail-promo-1',
+  subject: '本日まで！限定クーポンキャンペーン',
+  from: 'shop@example.com',
+  labelIds: ['CATEGORY_PROMOTIONS'],
+  snippet: '7/30まで50%OFF。ポイント増量中。配信停止はこちら。',
+  body: '',
+}], new Date('2026-07-25T09:00:00'))
+assert.equal(noisyPromoGmail.length, 0)
+
+const realPaymentDeadline = parseDeadlineCandidatesFromEmails([{
+  id: 'gmail-real-payment-1',
+  subject: '授業料のお支払い期限',
+  from: 'office@example.ac.jp',
+  labelIds: ['CATEGORY_PROMOTIONS'],
+  snippet: '7/30 17時までにお支払いください。',
+  body: '',
+}], new Date('2026-07-25T09:00:00'))
+assert.equal(realPaymentDeadline.length, 1)
+assert.equal(realPaymentDeadline[0].deadline, '2026-07-30T17:00')
+
 const preAuthActionToken = process.env.GPT_ACTION_TOKEN
 process.env.GPT_ACTION_TOKEN = 'gpt-action-auth-check-token'
 const unauthenticatedInboxBeforeValidation = await callGptInbox({ items: [{ type: 'task', title: '洗剤を買う' }] })

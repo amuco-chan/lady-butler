@@ -4,7 +4,8 @@ import { parseDeadlineCandidatesFromEmails } from '../server/email-deadline-pars
 
 const maxBodyBytes = 8 * 1024
 const deadlineQueryTerms = [
-  '締切', '〆切', '期限', '提出', '回答', '返信', '支払い', '支払', '入金', '申込', '登録', '必着', '課題', 'レポート', 'due', 'deadline',
+  '締切', '〆切', '提出期限', '回答期限', '返信期限', '支払期限', '支払い期限', '申込期限', '登録期限', '必着',
+  '提出', '回答', '返信', '支払い', '支払', '入金', '申込', '申し込み', '手続き', '書類', '課題', 'レポート', 'due', 'deadline',
 ]
 
 async function readJson(req) {
@@ -30,7 +31,7 @@ async function requireSync(req, res) {
 
 function searchQuery(days) {
   const safeDays = Math.min(90, Math.max(1, Number(days) || 30))
-  return `newer_than:${safeDays}d (${deadlineQueryTerms.join(' OR ')})`
+  return `newer_than:${safeDays}d in:inbox -category:promotions -category:social -category:forums (${deadlineQueryTerms.join(' OR ')})`
 }
 
 export default async function handler(req, res) {

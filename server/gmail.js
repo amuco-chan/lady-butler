@@ -209,6 +209,7 @@ export function normalizeGmailMessage(message) {
   return {
     id: text(message.id),
     threadId: text(message.threadId),
+    labelIds: Array.isArray(message.labelIds) ? message.labelIds.map(label => text(label)).filter(Boolean) : [],
     subject: headers.subject || '(件名なし)',
     from: headers.from || '',
     date: headers.date || '',

@@ -1,7 +1,14 @@
-const deadlineKeywords = /締切|〆切|期限|提出|回答|返信|支払|支払い|入金|申込|申し込み|登録|必着|課題|レポート|宿題|まで|due|deadline/i
+const hardDeadlineKeywords = /締切|〆切|提出期限|回答期限|返信期限|支払期限|支払い期限|申込期限|申し込み期限|登録期限|期限厳守|必着|due|deadline/i
+const deadlineKeywords = /締切|〆切|提出期限|回答期限|返信期限|支払期限|支払い期限|申込期限|申し込み期限|登録期限|期限厳守|提出|回答|返信|支払|支払い|入金|申込|申し込み|手続|書類|必着|課題|レポート|宿題|due|deadline/i
 const urgentKeywords = /至急|急ぎ|重要|本日|今日|明日|期限厳守|必着|リマインド|reminder/i
 const shortTaskKeywords = /回答|返信|連絡|確認|申込|申し込み|登録/i
 const longTaskKeywords = /レポート|課題|論文|発表|資料|試験|テスト/i
+const actionIntentKeywords = /提出|回答|返信|連絡|確認|申込|申し込み|登録|手続|書類|課題|レポート|宿題|発表|論文|試験|テスト|出席|予約|面談|受講|フォーム|アンケート|送付|支払|支払い|入金|納付|振込|必着|提出してください|回答してください|返信してください|ご確認ください|確認してください|完了してください/i
+const strongActionKeywords = /提出|回答|返信|支払|支払い|入金|納付|振込|書類|課題|レポート|宿題|論文|試験|テスト|予約|面談|必着/i
+const softDeadlineKeywords = /期限|まで|中に|までに|必着/i
+const marketingNoiseKeywords = /キャンペーン|セール|sale|クーポン|coupon|ポイント|pt|割引|特価|お得|おすすめ|新着|ランキング|プレゼント|抽選|送料無料|タイムセール|限定オファー|特別価格|広告|プロモーション|promotion|offer expires|sale ends/i
+const newsletterKeywords = /配信停止|購読解除|unsubscribe|メールマガジン|メルマガ|ニュースレター|newsletter|このメールは.*配信|今後の配信/i
+const promotionalLabelIds = new Set(['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'CATEGORY_FORUMS'])
 const weekdayIndex = { 日: 0, 月: 1, 火: 2, 水: 3, 木: 4, 金: 5, 土: 6 }
 
 const pad = value => String(value).padStart(2, '0')
@@ -103,6 +110,53 @@ function parseDeadline(text, baseDate) {
   return parseRelativeDeadline(text, baseDate) || parseAbsoluteDeadline(text, baseDate) || parseWeekdayDeadline(text, baseDate)
 }
 
+function hasActionIntent(text) {
+  return actionIntentKeywords.test(String(text || ''))
+}
+
+function hasStrongActionIntent(text) {
+  return strongActionKeywords.test(String(text || ''))
+}
+
+function hasDeadlineSignal(text, baseDate) {
+  const value = String(text || '')
+  if (!value.trim()) return false
+  if (hardDeadlineKeywords.test(value)) return true
+  const parsed = parseDeadline(value, baseDate)
+  if (parsed && (hasActionIntent(value) || softDeadlineKeywords.test(value))) return true
+  return softDeadlineKeywords.test(value) && hasActionIntent(value)
+}
+
+function isLikelyNoiseLine(text) {
+  const value = String(text || '')
+  if (!value.trim()) return true
+  if (!marketingNoiseKeywords.test(value) && !newsletterKeywords.test(value)) return false
+  return !hasStrongActionIntent(value)
+}
+
+function hasPromotionalLabel(labelIds) {
+  return Array.isArray(labelIds) && labelIds.some(label => promotionalLabelIds.has(String(label || '')))
+}
+
+function isLikelyNoiseEmail(text, options = {}) {
+  const subject = String(options.subject || '')
+  const from = String(options.from || '')
+  const value = `${subject}\n${from}\n${text}`
+  const hasStrongAction = hasStrongActionIntent(value)
+  if (hasPromotionalLabel(options.labelIds) && !hasStrongAction) return true
+  if (newsletterKeywords.test(value) && !hasStrongAction) return true
+  if (marketingNoiseKeywords.test(subject) && !hasStrongAction) return true
+  const noiseHits = [
+    /キャンペーン|campaign/i,
+    /セール|sale|特価|特別価格/i,
+    /クーポン|coupon/i,
+    /ポイント|pt/i,
+    /おすすめ|ランキング|新着/i,
+    /プレゼント|抽選|送料無料/i,
+  ].filter(pattern => pattern.test(value)).length
+  return noiseHits >= 2 && !hasStrongAction
+}
+
 function compactText(text, max = 80) {
   const clean = String(text || '')
     .replace(/^(件名|subject|締切|期限|提出期限)\s*[:：]\s*/i, '')
@@ -143,9 +197,9 @@ function categoryFor(text) {
 
 function pickCandidateLines(text, baseDate) {
   const lines = String(text || '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-  const picked = lines.filter(line => deadlineKeywords.test(line) || parseAbsoluteDeadline(line, baseDate) || parseRelativeDeadline(line, baseDate) || parseWeekdayDeadline(line, baseDate))
+  const picked = lines.filter(line => hasDeadlineSignal(line, baseDate) && !isLikelyNoiseLine(line))
   if (picked.length) return picked
-  return deadlineKeywords.test(text) ? [compactText(text, 220)] : []
+  return hasDeadlineSignal(text, baseDate) && !isLikelyNoiseLine(text) ? [compactText(text, 220)] : []
 }
 
 export function parseEmailDeadlineCandidates(input, baseDate = new Date(), options = {}) {
@@ -154,6 +208,7 @@ export function parseEmailDeadlineCandidates(input, baseDate = new Date(), optio
   const subject = compactText(options.subject || text.match(/^(?:件名|subject)\s*[:：]\s*(.+)$/im)?.[1] || '', 60)
   const from = compactText(options.from || '', 80)
   const messageId = compactText(options.messageId || '', 80)
+  if (isLikelyNoiseEmail(text, options)) return []
   const lines = pickCandidateLines(text, baseDate).slice(0, 8)
   if (!lines.length) return []
 
@@ -206,6 +261,7 @@ export function parseDeadlineCandidatesFromEmails(emails, baseDate = new Date())
       subject: email.subject,
       from: email.from,
       messageId: email.id,
+      labelIds: email.labelIds,
     }))
   }
   const seen = new Set()
