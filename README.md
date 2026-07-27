@@ -144,8 +144,7 @@ iPhoneはSafariの共有メニューから「ホーム画面に追加」、Andro
 - `api/gmail-auth.js` / `api/gmail-callback.js` — Gmail読み取り専用OAuth
 - `api/gmail-deadlines.js` — Gmailから締切候補を抽出
 - `api/calendar-auth.js` / `api/calendar-callback.js` — GoogleカレンダーOAuth
-- `api/calendar-events.js` — Googleカレンダーから予定を取得
-- `api/calendar-sync.js` — Lady Butlerの予定をGoogleカレンダーへ作成・更新
+- `api/calendar-events.js` — Googleカレンダーから予定を取得、Lady Butlerの予定をGoogleカレンダーへ作成・更新
 - `public/gpt-action-openapi.json` — Custom GPT Actions用のOpenAPI定義
 
 ## 今後追加できる機能

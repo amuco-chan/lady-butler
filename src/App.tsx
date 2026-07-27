@@ -1203,10 +1203,10 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents, updateEve
     setCalendarExporting(mode)
     setCalendarMessage('Lady Butlerの予定をGoogleカレンダーへ反映しています。')
     try {
-      const response = await fetch('/api/calendar-sync', {
+      const response = await fetch('/api/calendar-events', {
         method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events: cleanTargets }),
+        body: JSON.stringify({ mode: 'syncToGoogle', events: cleanTargets }),
       })
       const payload = await response.json().catch(() => ({}))
       if (response.status === 409) {

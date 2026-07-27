@@ -3,7 +3,6 @@ import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
 import calendarAuthHandler from '../api/calendar-auth.js'
 import calendarEventsHandler from '../api/calendar-events.js'
-import calendarSyncHandler from '../api/calendar-sync.js'
 import gmailAuthHandler from '../api/gmail-auth.js'
 import gmailDeadlinesHandler from '../api/gmail-deadlines.js'
 import gptContextHandler from '../api/gpt-context.js'
@@ -118,18 +117,6 @@ async function callCalendarEvents(body, options = {}) {
   return { status: res.statusCode, body: JSON.parse(responseBody) }
 }
 
-async function callCalendarSync(body, options = {}) {
-  let responseBody = ''
-  const req = { method: options.method || 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
-  const res = {
-    statusCode: 0,
-    headers: {},
-    setHeader(name, value) { this.headers[name] = value },
-    end(value) { responseBody = String(value) },
-  }
-  await calendarSyncHandler(req, res)
-  return { status: res.statusCode, body: JSON.parse(responseBody) }
-}
 
 assert.equal(defaultSettings.name, 'レディ')
 assert.equal(defaultSettings.tone, '執事')
@@ -492,7 +479,7 @@ assert.match(calendarStart.body.url, /calendar\.events/)
 assert.match(calendarStart.body.url, /include_granted_scopes=true/)
 const calendarScanBeforeConnect = await callCalendarEvents({ daysAfter: 30 }, { headers: cloudHeaders })
 assert.equal(calendarScanBeforeConnect.status, 409)
-const calendarSyncBeforeConnect = await callCalendarSync({ events: [{ id: 'event-local-1', title: 'ゼミ面談', startAt: '2026-07-30T13:00', endAt: '2026-07-30T14:00', location: '', memo: '', source: 'manual', createdAt: '', updatedAt: '' }] }, { headers: cloudHeaders })
+const calendarSyncBeforeConnect = await callCalendarEvents({ mode: 'syncToGoogle', events: [{ id: 'event-local-1', title: 'ゼミ面談', startAt: '2026-07-30T13:00', endAt: '2026-07-30T14:00', location: '', memo: '', source: 'manual', createdAt: '', updatedAt: '' }] }, { headers: cloudHeaders })
 assert.equal(calendarSyncBeforeConnect.status, 409)
 
 const emptyAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
