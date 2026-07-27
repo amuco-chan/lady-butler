@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
+import calendarAuthHandler from '../api/calendar-auth.js'
+import calendarEventsHandler from '../api/calendar-events.js'
 import gmailAuthHandler from '../api/gmail-auth.js'
 import gmailDeadlinesHandler from '../api/gmail-deadlines.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
 import syncTokenHandler from '../api/sync-token.js'
 import { parseDeadlineCandidatesFromEmails } from '../server/email-deadline-parser.js'
+import { normalizeGoogleCalendarEvent } from '../server/google-calendar.js'
 import { parseEmailDeadlineCandidates } from '../src/email-deadlines.ts'
 import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, workLogMinutes } from '../src/lib.ts'
 
@@ -85,6 +88,32 @@ async function callGmailDeadlines(body, options = {}) {
     end(value) { responseBody = String(value) },
   }
   await gmailDeadlinesHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callCalendarAuth(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'GET', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await calendarAuthHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callCalendarEvents(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await calendarEventsHandler(req, res)
   return { status: res.statusCode, body: JSON.parse(responseBody) }
 }
 
@@ -173,6 +202,31 @@ assert.equal(icsEvents.length, 1)
 assert.equal(icsEvents[0].title, '英米文学')
 assert.equal(icsEvents[0].recurrence, 'weekly')
 assert.equal(icsEvents[0].recurrenceUntil, '2026-07-27')
+
+const googleTimedEvent = normalizeGoogleCalendarEvent({
+  id: 'google-event-1',
+  summary: 'ゼミ面談',
+  start: { dateTime: '2026-07-30T13:00:00+09:00' },
+  end: { dateTime: '2026-07-30T14:00:00+09:00' },
+  location: '研究室',
+}, { id: 'primary', summary: 'tianzhongzinai@gmail.com' }, new Date('2026-07-25T09:00:00+09:00'))
+assert.equal(googleTimedEvent.source, 'google')
+assert.equal(googleTimedEvent.title, 'ゼミ面談')
+assert.equal(googleTimedEvent.startAt, '2026-07-30T13:00')
+assert.equal(googleTimedEvent.endAt, '2026-07-30T14:00')
+assert.equal(googleTimedEvent.location, '研究室')
+assert.equal(googleTimedEvent.allDay, false)
+
+const googleAllDayEvent = normalizeGoogleCalendarEvent({
+  id: 'google-event-2',
+  summary: '休講',
+  start: { date: '2026-07-31' },
+  end: { date: '2026-08-01' },
+}, { id: 'primary', summary: '大学カレンダー' }, new Date('2026-07-25T09:00:00+09:00'))
+assert.equal(googleAllDayEvent.allDay, true)
+assert.equal(googleAllDayEvent.startAt, '2026-07-31T00:00')
+assert.equal(googleAllDayEvent.endAt, '2026-07-31T23:59')
+assert.equal(formatEventTime(googleAllDayEvent).time, '終日')
 
 const deadlineWithTime = normalizeGptInboxPayload({
   sourceText: '金曜18時までにレポートを提出する',
@@ -301,6 +355,10 @@ const originalRedisToken = process.env.UPSTASH_REDIS_REST_TOKEN
 const originalGmailClientId = process.env.GMAIL_CLIENT_ID
 const originalGmailClientSecret = process.env.GMAIL_CLIENT_SECRET
 const originalGmailTokenSecret = process.env.GMAIL_TOKEN_SECRET
+const originalCalendarClientId = process.env.CALENDAR_CLIENT_ID
+const originalCalendarClientSecret = process.env.CALENDAR_CLIENT_SECRET
+const originalCalendarTokenSecret = process.env.CALENDAR_TOKEN_SECRET
+const originalCalendarRedirectUri = process.env.CALENDAR_REDIRECT_URI
 const pipelines = []
 const queuedStore = new Map()
 const keyValueStore = new Map()
@@ -358,10 +416,22 @@ const deviceKeyCannotPost = await callGptInbox({ items: [{ type: 'task', title: 
 assert.equal(deviceKeyCannotPost.status, 401)
 
 const cloudHeaders = { authorization: 'Bearer personal-test-token' }
+delete process.env.GMAIL_CLIENT_ID
+delete process.env.GMAIL_CLIENT_SECRET
+delete process.env.GMAIL_TOKEN_SECRET
+delete process.env.CALENDAR_CLIENT_ID
+delete process.env.CALENDAR_CLIENT_SECRET
+delete process.env.CALENDAR_TOKEN_SECRET
+delete process.env.CALENDAR_REDIRECT_URI
 const gmailMissingConfig = await callGmailAuth(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(gmailMissingConfig.status, 200)
 assert.equal(gmailMissingConfig.body.configured, false)
 assert.ok(gmailMissingConfig.body.needs.includes('GMAIL_CLIENT_ID'))
+
+const calendarMissingConfig = await callCalendarAuth(undefined, { method: 'GET', headers: cloudHeaders })
+assert.equal(calendarMissingConfig.status, 200)
+assert.equal(calendarMissingConfig.body.configured, false)
+assert.ok(calendarMissingConfig.body.needs.includes('CALENDAR_CLIENT_ID または GMAIL_CLIENT_ID'))
 
 process.env.GMAIL_CLIENT_ID = 'gmail-client-id'
 process.env.GMAIL_CLIENT_SECRET = 'gmail-client-secret'
@@ -376,6 +446,19 @@ assert.match(gmailStart.body.url, /accounts\.google\.com/)
 assert.match(gmailStart.body.url, /gmail\.readonly/)
 const gmailScanBeforeConnect = await callGmailDeadlines({ days: 30 }, { headers: cloudHeaders })
 assert.equal(gmailScanBeforeConnect.status, 409)
+
+const calendarDisconnected = await callCalendarAuth(undefined, { method: 'GET', headers: cloudHeaders })
+assert.equal(calendarDisconnected.status, 200)
+assert.equal(calendarDisconnected.body.configured, true)
+assert.equal(calendarDisconnected.body.connected, false)
+assert.equal(calendarDisconnected.body.redirectUri, 'https://lady-butler.vercel.app/api/calendar-callback')
+const calendarStart = await callCalendarAuth(undefined, { method: 'POST', headers: cloudHeaders })
+assert.equal(calendarStart.status, 200)
+assert.match(calendarStart.body.url, /accounts\.google\.com/)
+assert.match(calendarStart.body.url, /calendar\.readonly/)
+assert.match(calendarStart.body.url, /include_granted_scopes=true/)
+const calendarScanBeforeConnect = await callCalendarEvents({ daysAfter: 30 }, { headers: cloudHeaders })
+assert.equal(calendarScanBeforeConnect.status, 409)
 
 const emptyAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(emptyAppData.status, 200)
@@ -483,6 +566,10 @@ if (originalRedisToken === undefined) delete process.env.UPSTASH_REDIS_REST_TOKE
 if (originalGmailClientId === undefined) delete process.env.GMAIL_CLIENT_ID; else process.env.GMAIL_CLIENT_ID = originalGmailClientId
 if (originalGmailClientSecret === undefined) delete process.env.GMAIL_CLIENT_SECRET; else process.env.GMAIL_CLIENT_SECRET = originalGmailClientSecret
 if (originalGmailTokenSecret === undefined) delete process.env.GMAIL_TOKEN_SECRET; else process.env.GMAIL_TOKEN_SECRET = originalGmailTokenSecret
+if (originalCalendarClientId === undefined) delete process.env.CALENDAR_CLIENT_ID; else process.env.CALENDAR_CLIENT_ID = originalCalendarClientId
+if (originalCalendarClientSecret === undefined) delete process.env.CALENDAR_CLIENT_SECRET; else process.env.CALENDAR_CLIENT_SECRET = originalCalendarClientSecret
+if (originalCalendarTokenSecret === undefined) delete process.env.CALENDAR_TOKEN_SECRET; else process.env.CALENDAR_TOKEN_SECRET = originalCalendarTokenSecret
+if (originalCalendarRedirectUri === undefined) delete process.env.CALENDAR_REDIRECT_URI; else process.env.CALENDAR_REDIRECT_URI = originalCalendarRedirectUri
 
 const actionSchema = JSON.parse(await readFile(new URL('../public/gpt-action-openapi.json', import.meta.url), 'utf8'))
 const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content['application/json'].schema.properties.items.items
@@ -521,10 +608,12 @@ assert.match(appSource, /GPT_ACTION_TOKEN/)
 assert.match(appSource, /共通の同期キー/)
 assert.match(appSource, /うまく動かない時/)
 assert.match(appSource, /Gmailを確認/)
+assert.match(appSource, /Google予定を読み込む/)
 assert.doesNotMatch(appSource, /リンク受信モード/)
 
 const privacyPage = await readFile(new URL('../public/privacy.html', import.meta.url), 'utf8')
 assert.match(privacyPage, /プライバシーとデータの扱い/)
 assert.match(privacyPage, /クラウド上の記録/)
+assert.match(privacyPage, /Googleカレンダー連携/)
 
 console.log('コア機能テスト: OK')

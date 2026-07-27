@@ -46,8 +46,10 @@ export interface CalendarEvent {
   memo: string
   recurrence?: EventRecurrence
   recurrenceUntil?: string
-  source?: 'manual' | 'gpt' | 'ics'
+  source?: 'manual' | 'gpt' | 'ics' | 'google'
   sourceEventId?: string
+  calendarId?: string
+  allDay?: boolean
   createdAt: string
   updatedAt: string
 }

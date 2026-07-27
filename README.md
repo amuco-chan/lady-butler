@@ -12,7 +12,7 @@
 - 気分に応じた今日のタスク量調整
 - カレンダー画面で予定の追加・編集・削除
 - 月カレンダー、毎日・毎週・毎月の繰り返し予定
-- Googleカレンダーから書き出した `.ics` ファイルの読み込み
+- Googleカレンダー読み取り専用連携と、予備の `.ics` ファイル読み込み
 - Custom GPTから届いた内容を自動追加し、曖昧なものだけ確認
 - Custom GPTが許可されたタスク・予定・気分・日記を必要時に参照
 - Gmailから締切・提出・返信期限らしいメールを確認し、タスク候補として取り込む
@@ -36,7 +36,7 @@
 
 1. ホーム：今日の最優先、予定時間、締切間近、最初の10分
 2. タスク：一覧、検索、並び替え、登録、編集、削除、完了
-3. カレンダー：予定一覧、予定追加、編集、削除、自然文からのGPT連携案内
+3. カレンダー：予定一覧、予定追加、編集、削除、Googleカレンダー読み込み、自然文からのGPT連携案内
 4. 日記・気分：気分、できたこと、しんどかったこと、明日への持ち越し、AIコメント
 5. 設定：呼び名、口調、通知、PC・スマホ同期、GPT連携、バックアップ
 
@@ -76,6 +76,23 @@ Vercelには次の環境変数を追加します。
 - `GMAIL_TOKEN_SECRET`
 
 Gmail連携は読み取り専用スコープ `https://www.googleapis.com/auth/gmail.readonly` だけを使います。取得したメール本文はタスク候補の解析に使い、全文をLady Butlerの保存データへ残しません。
+
+## Googleカレンダーから予定を読み込む
+
+カレンダー画面の「Google予定を読み込む」から、Googleカレンダーの今後の予定をLady Butlerへ取り込めます。授業・バイト・面談など開始時刻が決まっているものは予定として扱い、やることとは分けて表示します。Google側の予定を編集・削除することはありません。
+
+初回だけGoogle Cloud側でCalendar APIを有効化し、Gmail連携で使っているOAuth Webクライアントに次のリダイレクトURIを追加します。
+
+`https://lady-butler.vercel.app/api/calendar-callback`
+
+Gmail連携と同じOAuthクライアントを使う場合、Vercelに新しい環境変数を追加しなくても動きます。別クライアントに分けたい場合だけ、次を追加します。
+
+- `CALENDAR_CLIENT_ID`
+- `CALENDAR_CLIENT_SECRET`
+- `CALENDAR_REDIRECT_URI`
+- `CALENDAR_TOKEN_SECRET`
+
+Googleカレンダー連携は読み取り専用スコープ `https://www.googleapis.com/auth/calendar.readonly` だけを使います。取り込んだ予定はアプリ内の予定データとして保存され、PC・スマホ同期にも入ります。
 
 プライバシー方針は `/privacy.html` で公開しています。設定画面からクラウド上の記録、GPT受信待ち、通知先を削除し、同期を解除できます。
 
@@ -124,12 +141,14 @@ iPhoneはSafariの共有メニューから「ホーム画面に追加」、Andro
 - `api/app-data.js` — PC・スマートフォン間のアプリデータ同期
 - `api/gmail-auth.js` / `api/gmail-callback.js` — Gmail読み取り専用OAuth
 - `api/gmail-deadlines.js` — Gmailから締切候補を抽出
+- `api/calendar-auth.js` / `api/calendar-callback.js` — Googleカレンダー読み取り専用OAuth
+- `api/calendar-events.js` — Googleカレンダーから予定を取得
 - `public/gpt-action-openapi.json` — Custom GPT Actions用のOpenAPI定義
 
 ## 今後追加できる機能
 
 - 記録内容をもとにした、より柔軟な振り返りと文章支援
-- Googleカレンダーとの自動同期（現在は `.ics` 読み込みに対応）
+- Googleカレンダー予定の差分更新と非表示設定
 - 締切通知と定時の進捗確認
 - ファイル・授業資料の読み込み
 - PWA化、音声入力、ウィジェット

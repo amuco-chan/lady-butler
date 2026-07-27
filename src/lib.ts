@@ -126,7 +126,7 @@ export function formatDeadline(value: string, compact = false) {
   return { date, label, urgent: diff <= 1 }
 }
 
-export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt'>) {
+export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt' | 'allDay'>) {
   const start = new Date(event.startAt)
   const end = new Date(event.endAt)
   const safeStart = Number.isNaN(start.getTime()) ? new Date() : start
@@ -141,7 +141,7 @@ export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt'>)
   const sameDay = localDate(safeStart) === localDate(safeEnd)
   return {
     date,
-    time: sameDay ? `${startTime} - ${endTime}` : `${startTime} - ${new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(safeEnd)}`,
+    time: event.allDay ? '終日' : sameDay ? `${startTime} - ${endTime}` : `${startTime} - ${new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(safeEnd)}`,
     label,
     today: diff === 0,
     past: diff < 0,
