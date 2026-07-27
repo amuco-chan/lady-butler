@@ -3,13 +3,14 @@ import { readFile } from 'node:fs/promises'
 import appDataHandler from '../api/app-data.js'
 import calendarAuthHandler from '../api/calendar-auth.js'
 import calendarEventsHandler from '../api/calendar-events.js'
+import calendarSyncHandler from '../api/calendar-sync.js'
 import gmailAuthHandler from '../api/gmail-auth.js'
 import gmailDeadlinesHandler from '../api/gmail-deadlines.js'
 import gptContextHandler from '../api/gpt-context.js'
 import gptInboxHandler from '../api/gpt-inbox.js'
 import syncTokenHandler from '../api/sync-token.js'
 import { parseDeadlineCandidatesFromEmails } from '../server/email-deadline-parser.js'
-import { normalizeGoogleCalendarEvent } from '../server/google-calendar.js'
+import { appEventToGooglePayload, calendarCanWrite, normalizeGoogleCalendarEvent } from '../server/google-calendar.js'
 import { parseEmailDeadlineCandidates } from '../src/email-deadlines.ts'
 import { butlerGreeting, butlerScheduleAdvice, canAutoAddInboxItem, dayPlan, defaultSettings, expandRecurringEvents, formatDeadline, formatEventTime, formatWorkLogTime, inboxItemToEvent, inboxItemToTask, makeDiaryComment, moodGuidance, moodTrend, normalizeGptInboxPayload, parseIcsCalendar, rankedTasks, sampleTasks, scheduleLoadFor, stableButlerChoice, taskActualMinutes, taskLimitForSchedule, taskRemainingMinutes, workLogMinutes } from '../src/lib.ts'
 
@@ -114,6 +115,19 @@ async function callCalendarEvents(body, options = {}) {
     end(value) { responseBody = String(value) },
   }
   await calendarEventsHandler(req, res)
+  return { status: res.statusCode, body: JSON.parse(responseBody) }
+}
+
+async function callCalendarSync(body, options = {}) {
+  let responseBody = ''
+  const req = { method: options.method || 'POST', body, headers: { host: 'lady-butler.vercel.app', 'x-forwarded-proto': 'https', ...(options.headers || {}) } }
+  const res = {
+    statusCode: 0,
+    headers: {},
+    setHeader(name, value) { this.headers[name] = value },
+    end(value) { responseBody = String(value) },
+  }
+  await calendarSyncHandler(req, res)
   return { status: res.statusCode, body: JSON.parse(responseBody) }
 }
 
@@ -227,6 +241,23 @@ assert.equal(googleAllDayEvent.allDay, true)
 assert.equal(googleAllDayEvent.startAt, '2026-07-31T00:00')
 assert.equal(googleAllDayEvent.endAt, '2026-07-31T23:59')
 assert.equal(formatEventTime(googleAllDayEvent).time, '終日')
+assert.equal(googleAllDayEvent.googleEventId, 'google-event-2')
+assert.equal(calendarCanWrite({ scope: 'https://www.googleapis.com/auth/calendar.readonly' }), false)
+assert.equal(calendarCanWrite({ scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events' }), true)
+
+const googlePayload = appEventToGooglePayload({
+  title: 'ゼミ面談',
+  startAt: '2026-07-30T13:00',
+  endAt: '2026-07-30T14:00',
+  location: '研究室',
+  memo: '資料を持参',
+  recurrence: 'weekly',
+  recurrenceUntil: '2026-08-31',
+})
+assert.equal(googlePayload.summary, 'ゼミ面談')
+assert.equal(googlePayload.start.dateTime, '2026-07-30T13:00:00+09:00')
+assert.equal(googlePayload.end.dateTime, '2026-07-30T14:00:00+09:00')
+assert.deepEqual(googlePayload.recurrence, ['RRULE:FREQ=WEEKLY;UNTIL=20260831T145959Z'])
 
 const deadlineWithTime = normalizeGptInboxPayload({
   sourceText: '金曜18時までにレポートを提出する',
@@ -451,14 +482,18 @@ const calendarDisconnected = await callCalendarAuth(undefined, { method: 'GET', 
 assert.equal(calendarDisconnected.status, 200)
 assert.equal(calendarDisconnected.body.configured, true)
 assert.equal(calendarDisconnected.body.connected, false)
+assert.equal(calendarDisconnected.body.canWrite, false)
 assert.equal(calendarDisconnected.body.redirectUri, 'https://lady-butler.vercel.app/api/calendar-callback')
 const calendarStart = await callCalendarAuth(undefined, { method: 'POST', headers: cloudHeaders })
 assert.equal(calendarStart.status, 200)
 assert.match(calendarStart.body.url, /accounts\.google\.com/)
 assert.match(calendarStart.body.url, /calendar\.readonly/)
+assert.match(calendarStart.body.url, /calendar\.events/)
 assert.match(calendarStart.body.url, /include_granted_scopes=true/)
 const calendarScanBeforeConnect = await callCalendarEvents({ daysAfter: 30 }, { headers: cloudHeaders })
 assert.equal(calendarScanBeforeConnect.status, 409)
+const calendarSyncBeforeConnect = await callCalendarSync({ events: [{ id: 'event-local-1', title: 'ゼミ面談', startAt: '2026-07-30T13:00', endAt: '2026-07-30T14:00', location: '', memo: '', source: 'manual', createdAt: '', updatedAt: '' }] }, { headers: cloudHeaders })
+assert.equal(calendarSyncBeforeConnect.status, 409)
 
 const emptyAppData = await callAppData(undefined, { method: 'GET', headers: cloudHeaders })
 assert.equal(emptyAppData.status, 200)
@@ -609,11 +644,13 @@ assert.match(appSource, /共通の同期キー/)
 assert.match(appSource, /うまく動かない時/)
 assert.match(appSource, /Gmailを確認/)
 assert.match(appSource, /Google予定を読み込む/)
+assert.match(appSource, /未反映をGoogleへ反映/)
 assert.doesNotMatch(appSource, /リンク受信モード/)
 
 const privacyPage = await readFile(new URL('../public/privacy.html', import.meta.url), 'utf8')
 assert.match(privacyPage, /プライバシーとデータの扱い/)
 assert.match(privacyPage, /クラウド上の記録/)
 assert.match(privacyPage, /Googleカレンダー連携/)
+assert.match(privacyPage, /Googleカレンダー側の予定は削除しません/)
 
 console.log('コア機能テスト: OK')

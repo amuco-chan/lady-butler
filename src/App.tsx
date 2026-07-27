@@ -156,6 +156,10 @@ export default function App() {
     })
     return fresh.length ? [...prev, ...fresh] : prev
   })
+  const updateCalendarEvents = (incoming: CalendarEvent[]) => setEvents(prev => prev.map(event => {
+    const replacement = incoming.find(item => item.id === event.id)
+    return replacement ? { ...event, ...replacement } : event
+  }))
   const complete = (id: string) => setTasks(prev => prev.map(t => {
     if (t.id !== id) return t
     const now = new Date().toISOString()
@@ -651,7 +655,7 @@ export default function App() {
         {page === 'home' && <InstallPrompt/>}
         {page === 'home' && <HomePage name={settings.name.trim() || 'レディ'} settings={settings} tasks={tasks} taskWorkLogs={taskWorkLogs} events={events} moodLogs={moodLogs} gptInbox={gptInbox} importNotice={importNotice} go={changePage} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem}/>}
         {page === 'tasks' && <TasksPage tasks={tasks} taskWorkLogs={taskWorkLogs} syncToken={syncToken} gptInbox={gptInbox} importNotice={importNotice} edit={task => { setReviewingInbox(null); setEditing(task) }} remove={id => setTasks(p => p.filter(t => t.id !== id))} complete={complete} logTime={logTaskTime} logFocus={logFocusTime} acceptInboxItem={acceptInboxItem} reviewInboxItem={reviewInboxItem} dismissInboxItem={dismissInboxItem} importEmailCandidates={importEmailCandidates}/>}
-        {page === 'calendar' && <CalendarPage events={events} syncToken={syncToken} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents}/>}
+        {page === 'calendar' && <CalendarPage events={events} syncToken={syncToken} edit={event => { setReviewingInbox(null); setEditingEvent(event) }} remove={id => setEvents(prev => prev.filter(event => event.id !== id))} importEvents={importCalendarEvents} updateEvents={updateCalendarEvents}/>}
         {page === 'diary' && <DiaryPage settings={settings} moodLogs={moodLogs} diaries={diaries} saveMood={saveMood} saveDiary={saveDiary}/>}
         {page === 'settings' && <SettingsPage
           settings={settings} setSettings={setSettings} syncToken={syncToken} setSyncToken={setSyncToken}
@@ -995,7 +999,7 @@ function TasksPage({ tasks, taskWorkLogs, syncToken, gptInbox, importNotice, edi
   </>
 }
 
-function CalendarPage({ events, syncToken, edit, remove, importEvents }: { events: CalendarEvent[]; syncToken: string; edit: (event: CalendarEvent) => void; remove: (id: string) => void; importEvents: (events: CalendarEvent[]) => void }) {
+function CalendarPage({ events, syncToken, edit, remove, importEvents, updateEvents }: { events: CalendarEvent[]; syncToken: string; edit: (event: CalendarEvent) => void; remove: (id: string) => void; importEvents: (events: CalendarEvent[]) => void; updateEvents: (events: CalendarEvent[]) => void }) {
   const [month, setMonth] = useState(() => { const date = new Date(); date.setDate(1); date.setHours(0, 0, 0, 0); return date })
   const [selectedDate, setSelectedDate] = useState(localDate())
   const [importMessage, setImportMessage] = useState('')
@@ -1004,6 +1008,8 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
   const [calendarMessage, setCalendarMessage] = useState('')
   const [calendarNeeds, setCalendarNeeds] = useState<string[]>([])
   const [calendarRedirectUri, setCalendarRedirectUri] = useState('')
+  const [calendarCanWrite, setCalendarCanWrite] = useState(false)
+  const [calendarExporting, setCalendarExporting] = useState('')
   const now = new Date()
   const rangeStart = new Date(now); rangeStart.setDate(rangeStart.getDate() - 62); rangeStart.setHours(0, 0, 0, 0)
   const rangeEnd = new Date(now); rangeEnd.setFullYear(rangeEnd.getFullYear() + 1); rangeEnd.setHours(23, 59, 59, 999)
@@ -1047,6 +1053,7 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
     const token = syncToken.trim()
     if (!token) {
       setCalendarStatus('disconnected')
+      setCalendarCanWrite(false)
       setCalendarMessage('先に設定で「同期キーを作る」を押すと、Googleカレンダー連携も使えるようになります。')
       return
     }
@@ -1064,12 +1071,16 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
       if (!response.ok) throw new Error(payload.error || 'calendar status failed')
       if (!payload.configured) {
         setCalendarStatus('unconfigured')
+        setCalendarCanWrite(false)
         setCalendarMessage('Googleカレンダー連携の準備がまだです。下の設定メモを確認してください。')
         return
       }
       setCalendarEmail(payload.emailAddress || payload.calendarName || '')
+      setCalendarCanWrite(!!payload.canWrite)
       setCalendarStatus(payload.connected ? 'connected' : 'disconnected')
-      if (!silent) setCalendarMessage(payload.connected ? 'Googleカレンダー接続済みです。予定を読み込めます。' : 'Googleカレンダーを一度接続すると、次から予定を読み込めます。')
+      if (!silent) setCalendarMessage(payload.connected
+        ? payload.canWrite ? 'Googleカレンダー接続済みです。読み込みと反映ができます。' : '読み込みはできます。Googleへ反映するには、もう一度接続して権限を追加してください。'
+        : 'Googleカレンダーを一度接続すると、次から予定を読み込めます。')
     } catch {
       setCalendarStatus('error')
       if (!silent) setCalendarMessage('Googleカレンダー連携の状態を確認できませんでした。少し待ってからもう一度お試しください。')
@@ -1081,7 +1092,7 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
     const calendar = params.get('calendar')
     if (calendar === 'connected') {
       setCalendarStatus('connected')
-      setCalendarMessage('Googleカレンダーを接続しました。予定を読み込めます。')
+      setCalendarMessage('Googleカレンダーを接続しました。読み込みと反映ができます。')
       checkCalendarStatus(true)
     }
     if (calendar === 'error') setCalendarMessage('Googleカレンダー接続が途中で止まりました。もう一度「Googleカレンダーを接続」を押してください。')
@@ -1158,6 +1169,7 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
     try {
       await fetch('/api/calendar-auth', { method: 'DELETE', headers: authHeaders() })
       setCalendarStatus('disconnected')
+      setCalendarCanWrite(false)
       setCalendarEmail('')
       setCalendarMessage('Googleカレンダー連携を解除しました。読み込み済みの予定はアプリ内に残ります。')
     } catch {
@@ -1166,10 +1178,71 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
     }
   }
   const removeOriginalEvent = (event: CalendarEvent) => remove(event.source === 'google' ? event.id : event.sourceEventId || event.id)
+  const eventNeedsGoogleSync = (event: CalendarEvent) => event.source !== 'google' && (!event.googleEventId || !event.googleSyncedAt || new Date(event.updatedAt).getTime() > new Date(event.googleSyncedAt).getTime())
+  const googleSyncCandidates = events.filter(event => event.source !== 'google' && event.title.trim())
+  const googlePendingEvents = googleSyncCandidates.filter(eventNeedsGoogleSync)
+  const syncEventsToGoogle = async (targets: CalendarEvent[], mode: string) => {
+    const token = syncToken.trim()
+    if (!token) {
+      setCalendarMessage('まず設定で「同期キーを作る」を押してください。')
+      return
+    }
+    if (!calendarConnected) {
+      setCalendarMessage('先にGoogleカレンダーを接続してください。')
+      return
+    }
+    if (!calendarCanWrite) {
+      setCalendarMessage('Googleへ反映するには、もう一度「Googleカレンダーを接続」を押して権限を追加してください。')
+      return
+    }
+    const cleanTargets = targets.filter(event => event.source !== 'google' && event.title.trim())
+    if (!cleanTargets.length) {
+      setCalendarMessage('Googleへ反映する予定はありません。')
+      return
+    }
+    setCalendarExporting(mode)
+    setCalendarMessage('Lady Butlerの予定をGoogleカレンダーへ反映しています。')
+    try {
+      const response = await fetch('/api/calendar-sync', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ events: cleanTargets }),
+      })
+      const payload = await response.json().catch(() => ({}))
+      if (response.status === 409) {
+        setCalendarStatus('disconnected')
+        setCalendarMessage('Googleカレンダーがまだ接続されていません。先に「Googleカレンダーを接続」を押してください。')
+        return
+      }
+      if (response.status === 401) {
+        setCalendarStatus('invalid')
+        setCalendarMessage('共通同期キーが一致していません。設定のPC・スマホ同期を確認してください。')
+        return
+      }
+      if (response.status === 403 && payload.needsReconnect) {
+        setCalendarCanWrite(false)
+        setCalendarMessage('Googleへ反映する権限が足りません。もう一度「Googleカレンダーを接続」を押してください。')
+        return
+      }
+      if (!response.ok) throw new Error(payload.error || 'calendar export failed')
+      const items = Array.isArray(payload.items) ? (payload.items as CalendarEvent[]) : []
+      updateEvents(items)
+      setCalendarStatus('connected')
+      setCalendarCanWrite(true)
+      setCalendarEmail(payload.connectedAs || payload.calendarName || calendarEmail)
+      setCalendarMessage(items.length ? `${items.length}件をGoogleカレンダーへ反映しました。編集した予定は次回から更新として反映できます。` : '反映できる予定はありませんでした。')
+    } catch {
+      setCalendarStatus('error')
+      setCalendarMessage('Googleカレンダーへの反映に失敗しました。接続が切れている場合は、もう一度接続してください。')
+    } finally {
+      setCalendarExporting('')
+    }
+  }
   const calendarConnected = calendarStatus === 'connected' || calendarStatus === 'syncing'
-  const calendarBusy = calendarStatus === 'checking' || calendarStatus === 'syncing'
+  const calendarBusy = calendarStatus === 'checking' || calendarStatus === 'syncing' || !!calendarExporting
   const calendarStatusLabel = calendarStatus === 'syncing' ? '予定読み込み中'
-    : calendarStatus === 'connected' ? 'Calendar接続済み'
+    : calendarExporting ? 'Google反映中'
+    : calendarStatus === 'connected' ? calendarCanWrite ? 'Calendar接続済み' : '反映は再接続'
       : calendarStatus === 'unconfigured' ? 'Calendar設定待ち'
         : calendarStatus === 'invalid' ? '同期キーを確認'
           : calendarStatus === 'checking' ? '接続確認中'
@@ -1183,21 +1256,22 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents }: { event
     </section>
     <section className="card month-calendar-card"><div className="month-calendar-head"><div><span>MONTH</span><h2>{new Intl.DateTimeFormat('ja-JP', { year: 'numeric', month: 'long' }).format(month)}</h2></div><div className="month-controls"><button type="button" onClick={() => moveMonth(-1)} aria-label="前の月"><ChevronLeft size={17}/></button><button type="button" onClick={backToToday}>今日</button><button type="button" onClick={() => moveMonth(1)} aria-label="次の月"><ChevronRight size={17}/></button></div></div><div className="month-weekdays">{['日','月','火','水','木','金','土'].map(day => <span key={day}>{day}</span>)}</div><div className="month-grid">{monthDays.map(day => <button type="button" key={localDate(day.date)} className={`${day.date.getMonth() !== month.getMonth() ? 'outside' : ''} ${localDate(day.date) === localDate() ? 'today' : ''} ${localDate(day.date) === selectedDate ? 'selected' : ''}`} onClick={() => setSelectedDate(localDate(day.date))}><b>{day.date.getDate()}</b><div>{day.events.slice(0, 2).map(event => <span key={event.id}><i/>{event.title}</span>)}{day.events.length > 2 && <small>ほか{day.events.length - 2}件</small>}</div></button>)}</div><div className="selected-day-agenda"><div><span>SELECTED DAY</span><strong>{new Intl.DateTimeFormat('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' }).format(new Date(`${selectedDate}T00:00:00`))}</strong></div>{selectedEvents.length ? <ul>{selectedEvents.map(event => <li key={event.id}><time>{event.allDay ? '終日' : new Intl.DateTimeFormat('ja-JP', { hour: '2-digit', minute: '2-digit' }).format(new Date(event.startAt))}</time><span>{event.title}</span>{recurrenceLabel(event.recurrence) && <b><Repeat2 size={11}/>{recurrenceLabel(event.recurrence)}</b>}</li>)}</ul> : <p>予定はありません</p>}</div></section>
     <div className="calendar-layout">
-      <section className="card calendar-list-card"><div className="section-title"><div><span>AGENDA</span><h2>これからの予定</h2></div><small>{upcoming.length}件</small></div>{upcoming.length ? <div className="event-list">{upcoming.map(event => <EventRow key={event.id} event={event} edit={() => edit(originalEvent(event))} remove={() => removeOriginalEvent(event)}/>)}</div> : <Empty text="これからの予定はありません"/>}</section>
-      <section className="card calendar-side-card"><div className="section-title"><div><span>ADD & IMPORT</span><h2>予定を集める</h2></div></div><div className="calendar-guide"><p>GPTには普段どおり話すだけで追加できます。Googleカレンダーは読み取り専用で、予定だけを取り込みます。</p><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTで話す<ExternalLink size={12}/></button><div className="google-calendar-panel"><div className={`calendar-status-pill calendar-${calendarStatus}`}><CalendarDays size={15}/><strong>{calendarStatusLabel}</strong>{calendarEmail && <span>{calendarEmail}</span>}</div><div className="calendar-actions"><button className="primary" type="button" onClick={syncGoogleCalendar} disabled={!calendarConnected || calendarBusy}><RefreshCw size={15}/>{calendarStatus === 'syncing' ? '読み込み中…' : 'Google予定を読み込む'}</button><button type="button" onClick={connectGoogleCalendar} disabled={calendarBusy}>{calendarConnected ? '再接続' : 'Googleカレンダーを接続'}</button>{calendarConnected && <button type="button" onClick={disconnectGoogleCalendar} disabled={calendarBusy}>接続解除</button>}</div>{calendarMessage && <small className="calendar-message" role="status">{calendarMessage}</small>}{calendarStatus === 'unconfigured' && <div className="calendar-setup-note"><strong>初回だけ必要な準備</strong><p>{calendarSetupText}</p>{calendarRedirectUri && <code>{calendarRedirectUri}</code>}<small>Gmail連携と同じGoogle設定を使えます。追加で必要なのはCalendar APIと、このリダイレクトURIです。</small></div>}<p className="calendar-readonly-note">Google側の予定を編集・削除しません。読み込んだ予定はPC・スマホ同期にも入ります。</p></div><details className="calendar-import"><summary>予備：.icsファイルを読み込む</summary><p>Googleカレンダーから書き出した .ics ファイルを読み込みます。既存の予定は重複しません。</p><label><Upload size={15}/> .icsを読み込む<input type="file" accept=".ics,text/calendar" onChange={event => { importIcs(event.target.files?.[0]); event.currentTarget.value = '' }}/></label>{importMessage && <small role="status">{importMessage}</small>}</details></div></section>
-      {past.length > 0 && <section className="card calendar-list-card calendar-past"><div className="section-title"><div><span>PAST</span><h2>過去の予定</h2></div><small>{past.length}件</small></div><div className="event-list">{past.map(event => <EventRow key={event.id} event={event} edit={() => edit(originalEvent(event))} remove={() => removeOriginalEvent(event)}/>)}</div></section>}
+      <section className="card calendar-list-card"><div className="section-title"><div><span>AGENDA</span><h2>これからの予定</h2></div><small>{upcoming.length}件</small></div>{upcoming.length ? <div className="event-list">{upcoming.map(event => { const original = originalEvent(event); return <EventRow key={event.id} event={event} edit={() => edit(original)} remove={() => removeOriginalEvent(event)} sync={() => syncEventsToGoogle([original], original.id)} canSync={calendarConnected && calendarCanWrite && original.source !== 'google'} syncing={calendarExporting === original.id} needsGoogleSync={eventNeedsGoogleSync(original)}/> })}</div> : <Empty text="これからの予定はありません"/>}</section>
+      <section className="card calendar-side-card"><div className="section-title"><div><span>ADD & SYNC</span><h2>予定をつなぐ</h2></div></div><div className="calendar-guide"><p>GPTには普段どおり話すだけで追加できます。Googleカレンダーとは、読み込みも反映もできます。</p><button className="gpt-open-button" type="button" onClick={openCustomGpt}><Sparkles size={15}/>GPTで話す<ExternalLink size={12}/></button><div className="google-calendar-panel"><div className={`calendar-status-pill calendar-${calendarStatus}`}><CalendarDays size={15}/><strong>{calendarStatusLabel}</strong>{calendarEmail && <span>{calendarEmail}</span>}</div><div className="calendar-sync-summary"><b>{googlePendingEvents.length}</b><span>Google未反映・更新待ち</span></div><div className="calendar-actions"><button className="primary" type="button" onClick={syncGoogleCalendar} disabled={!calendarConnected || calendarBusy}><RefreshCw size={15}/>{calendarStatus === 'syncing' ? '読み込み中…' : 'Google予定を読み込む'}</button><button type="button" onClick={() => syncEventsToGoogle(googlePendingEvents, 'bulk')} disabled={!calendarConnected || !calendarCanWrite || calendarBusy || !googlePendingEvents.length}><Cloud size={15}/>{calendarExporting === 'bulk' ? '反映中…' : '未反映をGoogleへ反映'}</button><button type="button" onClick={connectGoogleCalendar} disabled={calendarBusy}>{calendarConnected ? calendarCanWrite ? '再接続' : '反映権限で再接続' : 'Googleカレンダーを接続'}</button>{calendarConnected && <button type="button" onClick={disconnectGoogleCalendar} disabled={calendarBusy}>接続解除</button>}</div>{calendarMessage && <small className="calendar-message" role="status">{calendarMessage}</small>}{calendarStatus === 'unconfigured' && <div className="calendar-setup-note"><strong>初回だけ必要な準備</strong><p>{calendarSetupText}</p>{calendarRedirectUri && <code>{calendarRedirectUri}</code>}<small>Gmail連携と同じGoogle設定を使えます。追加で必要なのはCalendar APIと、このリダイレクトURIです。</small></div>}<p className="calendar-readonly-note">Googleから取り込んだ予定は読み取り専用です。Lady Butlerで作った予定はGoogleへ作成・更新できます。削除はGoogleへ反映しません。</p></div><details className="calendar-import"><summary>予備：.icsファイルを読み込む</summary><p>Googleカレンダーから書き出した .ics ファイルを読み込みます。既存の予定は重複しません。</p><label><Upload size={15}/> .icsを読み込む<input type="file" accept=".ics,text/calendar" onChange={event => { importIcs(event.target.files?.[0]); event.currentTarget.value = '' }}/></label>{importMessage && <small role="status">{importMessage}</small>}</details></div></section>
+      {past.length > 0 && <section className="card calendar-list-card calendar-past"><div className="section-title"><div><span>PAST</span><h2>過去の予定</h2></div><small>{past.length}件</small></div><div className="event-list">{past.map(event => { const original = originalEvent(event); return <EventRow key={event.id} event={event} edit={() => edit(original)} remove={() => removeOriginalEvent(event)} sync={() => syncEventsToGoogle([original], original.id)} canSync={calendarConnected && calendarCanWrite && original.source !== 'google'} syncing={calendarExporting === original.id} needsGoogleSync={eventNeedsGoogleSync(original)}/> })}</div></section>}
     </div>
   </>
 }
 
-function EventRow({ event, edit, remove }: { event: CalendarEvent; edit: () => void; remove: () => void }) {
+function EventRow({ event, edit, remove, sync, canSync, syncing, needsGoogleSync }: { event: CalendarEvent; edit: () => void; remove: () => void; sync: () => void; canSync: boolean; syncing: boolean; needsGoogleSync: boolean }) {
   const info = formatEventTime(event)
   const date = new Date(event.startAt)
   const googleSource = event.source === 'google'
+  const googleSynced = !googleSource && !!event.googleEventId
   return <article className={`event-row ${info.today ? 'today' : ''} ${info.past ? 'past' : ''} ${googleSource ? 'google-event' : ''}`}>
     <div className="event-date-tile"><b>{Number.isNaN(date.getTime()) ? '-' : date.getDate()}</b><span>{Number.isNaN(date.getTime()) ? '' : new Intl.DateTimeFormat('en', { month: 'short' }).format(date).toUpperCase()}</span></div>
-    <div className="event-main"><div><strong>{event.title}{googleSource && <b className="recurrence-chip google-event-chip">Google</b>}{recurrenceLabel(event.recurrence) && <b className="recurrence-chip"><Repeat2 size={11}/>{recurrenceLabel(event.recurrence)}</b>}</strong><span><Clock3 size={13}/>{info.label} {info.date} {info.time}</span>{event.location && <span><MapPin size={13}/>{event.location}</span>}</div>{event.memo && <p>{event.memo}</p>}</div>
-    {googleSource ? <div className="event-source-note">読み取り専用</div> : <div className="row-actions"><button type="button" onClick={edit} title="編集" aria-label={`「${event.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={remove} title="削除" aria-label={`「${event.title}」を削除`}><Trash2 size={16}/></button></div>}
+    <div className="event-main"><div><strong>{event.title}{googleSource && <b className="recurrence-chip google-event-chip">Google</b>}{googleSynced && <b className={`recurrence-chip ${needsGoogleSync ? 'google-pending-chip' : 'google-event-chip'}`}>{needsGoogleSync ? 'Google更新待ち' : 'Google済み'}</b>}{recurrenceLabel(event.recurrence) && <b className="recurrence-chip"><Repeat2 size={11}/>{recurrenceLabel(event.recurrence)}</b>}</strong><span><Clock3 size={13}/>{info.label} {info.date} {info.time}</span>{event.location && <span><MapPin size={13}/>{event.location}</span>}</div>{event.memo && <p>{event.memo}</p>}</div>
+    {googleSource ? <div className="event-source-note">読み取り専用</div> : <div className="row-actions"><button type="button" onClick={sync} disabled={!canSync || syncing || !needsGoogleSync} title={needsGoogleSync ? 'Googleカレンダーへ反映' : 'Googleカレンダーへ反映済み'} aria-label={`「${event.title}」をGoogleカレンダーへ反映`}><Cloud size={16}/></button><button type="button" onClick={edit} title="編集" aria-label={`「${event.title}」を編集`}><Edit3 size={16}/></button><button type="button" onClick={remove} title="削除" aria-label={`「${event.title}」を削除`}><Trash2 size={16}/></button></div>}
   </article>
 }
 

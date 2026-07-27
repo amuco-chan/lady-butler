@@ -49,6 +49,9 @@ export interface CalendarEvent {
   source?: 'manual' | 'gpt' | 'ics' | 'google'
   sourceEventId?: string
   calendarId?: string
+  googleEventId?: string
+  googleCalendarId?: string
+  googleSyncedAt?: string
   allDay?: boolean
   createdAt: string
   updatedAt: string

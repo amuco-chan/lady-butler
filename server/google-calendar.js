@@ -3,7 +3,9 @@ import { bearerToken, redisPipeline, syncTokenHash, text } from './sync-auth.js'
 
 const tokenKey = 'lady-butler:google-calendar-token:v1'
 const statePrefix = 'lady-butler:google-calendar-oauth-state:v1:'
-const calendarScope = 'https://www.googleapis.com/auth/calendar.readonly'
+const calendarReadScope = 'https://www.googleapis.com/auth/calendar.readonly'
+const calendarWriteScope = 'https://www.googleapis.com/auth/calendar.events'
+const calendarScopes = [calendarReadScope, calendarWriteScope]
 const defaultTimeZone = 'Asia/Tokyo'
 
 export function sendJson(res, status, data) {
@@ -80,7 +82,7 @@ export async function createCalendarAuthUrl(req) {
     client_id: config.clientId,
     redirect_uri: config.redirectUri,
     response_type: 'code',
-    scope: calendarScope,
+    scope: calendarScopes.join(' '),
     access_type: 'offline',
     prompt: 'consent',
     include_granted_scopes: 'true',
@@ -152,10 +154,27 @@ export async function removeCalendarConnection() {
   return Number(removed) || 0
 }
 
-export async function calendarFetch(accessToken, url) {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } })
+export function calendarCanWrite(connection) {
+  return text(connection?.scope).split(/\s+/).includes(calendarWriteScope)
+}
+
+export async function calendarFetch(accessToken, url, options = {}) {
+  const response = await fetch(url, {
+    method: options.method || 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  })
   const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(payload.error?.message || payload.error || `calendar request failed: ${response.status}`)
+  if (!response.ok) {
+    const error = new Error(payload.error?.message || payload.error || `calendar request failed: ${response.status}`)
+    error.status = response.status
+    error.reason = payload.error?.status || payload.error?.code || payload.error || ''
+    throw error
+  }
   return payload
 }
 
@@ -220,6 +239,82 @@ function compactText(value, max = 160) {
   return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean
 }
 
+function datePart(value) {
+  const match = text(value).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  return match ? `${match[1]}-${match[2]}-${match[3]}` : ''
+}
+
+function addDaysToDateText(value, days) {
+  const [year, month, day] = datePart(value).split('-').map(Number)
+  if (!year || !month || !day) return ''
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCDate(date.getUTCDate() + days)
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`
+}
+
+function googleDateTime(value) {
+  const clean = text(value)
+  const match = clean.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/)
+  return match ? `${match[1]}T${match[2]}:${match[3]}:00+09:00` : ''
+}
+
+function recurrenceRule(event) {
+  const recurrence = text(event?.recurrence)
+  const frequency = recurrence === 'daily' ? 'DAILY' : recurrence === 'weekly' ? 'WEEKLY' : recurrence === 'monthly' ? 'MONTHLY' : ''
+  if (!frequency) return ''
+  const until = datePart(event?.recurrenceUntil)
+  return until ? `RRULE:FREQ=${frequency};UNTIL=${until.replaceAll('-', '')}T145959Z` : `RRULE:FREQ=${frequency}`
+}
+
+export function appEventToGooglePayload(event) {
+  const title = compactText(event?.title || '(予定名なし)', 120)
+  const allDay = !!event?.allDay
+  const startDate = datePart(event?.startAt)
+  const endDate = datePart(event?.endAt) || startDate
+  const payload = {
+    summary: title,
+    location: compactText(event?.location || '', 120),
+    description: compactText(event?.memo || 'Lady Butlerから反映', 1000),
+    start: allDay
+      ? { date: startDate }
+      : { dateTime: googleDateTime(event?.startAt), timeZone: defaultTimeZone },
+    end: allDay
+      ? { date: addDaysToDateText(endDate, 1) || addDaysToDateText(startDate, 1) }
+      : { dateTime: googleDateTime(event?.endAt), timeZone: defaultTimeZone },
+  }
+  const rule = recurrenceRule(event)
+  if (rule) payload.recurrence = [rule]
+  return payload
+}
+
+export function normalizeAppCalendarEvent(value) {
+  const title = compactText(value?.title, 120)
+  const startAt = text(value?.startAt)
+  const endAt = text(value?.endAt)
+  if (!title || !startAt || !endAt) return null
+  const recurrence = ['daily', 'weekly', 'monthly'].includes(text(value?.recurrence)) ? text(value.recurrence) : 'none'
+  const source = ['manual', 'gpt', 'ics', 'google'].includes(text(value?.source)) ? text(value.source) : 'manual'
+  return {
+    id: text(value?.id).slice(0, 180) || randomBytes(12).toString('base64url'),
+    title,
+    startAt,
+    endAt,
+    location: compactText(value?.location || '', 120),
+    memo: compactText(value?.memo || '', 1000),
+    recurrence,
+    recurrenceUntil: datePart(value?.recurrenceUntil),
+    source,
+    sourceEventId: text(value?.sourceEventId).slice(0, 180),
+    calendarId: text(value?.calendarId).slice(0, 180),
+    allDay: !!value?.allDay,
+    googleEventId: text(value?.googleEventId).slice(0, 180),
+    googleCalendarId: text(value?.googleCalendarId).slice(0, 180),
+    googleSyncedAt: text(value?.googleSyncedAt),
+    createdAt: text(value?.createdAt) || new Date().toISOString(),
+    updatedAt: text(value?.updatedAt) || new Date().toISOString(),
+  }
+}
+
 export function normalizeGoogleCalendarEvent(item, calendar = {}, now = new Date()) {
   const allDay = !!item?.start?.date && !item?.start?.dateTime
   const eventTimeZone = text(item?.start?.timeZone || item?.end?.timeZone || calendar.timeZone) || defaultTimeZone
@@ -247,9 +342,35 @@ export function normalizeGoogleCalendarEvent(item, calendar = {}, now = new Date
     source: 'google',
     sourceEventId: sourceId,
     calendarId,
+    googleEventId: sourceId,
+    googleCalendarId: calendarId,
+    googleSyncedAt: now.toISOString(),
     allDay,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
+  }
+}
+
+export async function upsertGoogleCalendarEvent(accessToken, calendar, event, now = new Date()) {
+  const cleanEvent = normalizeAppCalendarEvent(event)
+  if (!cleanEvent || cleanEvent.source === 'google') return null
+  const calendarId = text(cleanEvent.googleCalendarId || calendar?.id || 'primary')
+  const payload = appEventToGooglePayload(cleanEvent)
+  if (!payload.start?.date && !payload.start?.dateTime) throw new Error('予定の開始日時を確認してください。')
+  if (!payload.end?.date && !payload.end?.dateTime) throw new Error('予定の終了日時を確認してください。')
+
+  const encodedCalendarId = encodeURIComponent(calendarId)
+  const googleEventId = text(cleanEvent.googleEventId)
+  const item = googleEventId
+    ? await calendarFetch(accessToken, `https://www.googleapis.com/calendar/v3/calendars/${encodedCalendarId}/events/${encodeURIComponent(googleEventId)}`, { method: 'PATCH', body: payload })
+    : await calendarFetch(accessToken, `https://www.googleapis.com/calendar/v3/calendars/${encodedCalendarId}/events`, { method: 'POST', body: payload })
+  const syncedAt = now.toISOString()
+  return {
+    ...cleanEvent,
+    googleEventId: text(item.id || googleEventId),
+    googleCalendarId: calendarId,
+    googleSyncedAt: syncedAt,
+    updatedAt: cleanEvent.updatedAt || syncedAt,
   }
 }
 

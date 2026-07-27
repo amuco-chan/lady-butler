@@ -1,5 +1,5 @@
 import { authorizeSyncRequest, redisConfig, syncAuthAvailable } from '../server/sync-auth.js'
-import { calendarSetupState, createCalendarAuthUrl, readCalendarConnection, removeCalendarConnection, sendJson } from '../server/google-calendar.js'
+import { calendarCanWrite, calendarSetupState, createCalendarAuthUrl, readCalendarConnection, removeCalendarConnection, sendJson } from '../server/google-calendar.js'
 
 async function requireSync(req, res) {
   if (!redisConfig() || !(await syncAuthAvailable())) {
@@ -26,6 +26,7 @@ export default async function handler(req, res) {
         ok: true,
         configured: setup.configured,
         connected: !!connection?.refreshToken,
+        canWrite: calendarCanWrite(connection),
         emailAddress: connection?.emailAddress || '',
         calendarId: connection?.calendarId || '',
         calendarName: connection?.calendarName || '',

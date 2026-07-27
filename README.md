@@ -12,7 +12,7 @@
 - 気分に応じた今日のタスク量調整
 - カレンダー画面で予定の追加・編集・削除
 - 月カレンダー、毎日・毎週・毎月の繰り返し予定
-- Googleカレンダー読み取り専用連携と、予備の `.ics` ファイル読み込み
+- Googleカレンダーからの読み込み、Lady Butler予定のGoogle反映、予備の `.ics` ファイル読み込み
 - Custom GPTから届いた内容を自動追加し、曖昧なものだけ確認
 - Custom GPTが許可されたタスク・予定・気分・日記を必要時に参照
 - Gmailから締切・提出・返信期限らしいメールを確認し、タスク候補として取り込む
@@ -79,7 +79,9 @@ Gmail連携は読み取り専用スコープ `https://www.googleapis.com/auth/gm
 
 ## Googleカレンダーから予定を読み込む
 
-カレンダー画面の「Google予定を読み込む」から、Googleカレンダーの今後の予定をLady Butlerへ取り込めます。授業・バイト・面談など開始時刻が決まっているものは予定として扱い、やることとは分けて表示します。Google側の予定を編集・削除することはありません。
+カレンダー画面の「Google予定を読み込む」から、Googleカレンダーの今後の予定をLady Butlerへ取り込めます。授業・バイト・面談など開始時刻が決まっているものは予定として扱い、やることとは分けて表示します。
+
+Lady Butlerで作った予定は「未反映をGoogleへ反映」からGoogleカレンダーへ作成・更新できます。Googleから取り込んだ予定はLady Butler上では読み取り専用として扱います。Lady Butlerで予定を削除しても、Googleカレンダー側の予定は削除しません。
 
 初回だけGoogle Cloud側でCalendar APIを有効化し、Gmail連携で使っているOAuth Webクライアントに次のリダイレクトURIを追加します。
 
@@ -92,7 +94,7 @@ Gmail連携と同じOAuthクライアントを使う場合、Vercelに新しい�
 - `CALENDAR_REDIRECT_URI`
 - `CALENDAR_TOKEN_SECRET`
 
-Googleカレンダー連携は読み取り専用スコープ `https://www.googleapis.com/auth/calendar.readonly` だけを使います。取り込んだ予定はアプリ内の予定データとして保存され、PC・スマホ同期にも入ります。
+Googleカレンダー連携は読み込み用の `https://www.googleapis.com/auth/calendar.readonly` と、予定作成・更新用の `https://www.googleapis.com/auth/calendar.events` を使います。取り込んだ予定やGoogleへ反映した状態はアプリ内の予定データとして保存され、PC・スマホ同期にも入ります。
 
 プライバシー方針は `/privacy.html` で公開しています。設定画面からクラウド上の記録、GPT受信待ち、通知先を削除し、同期を解除できます。
 
@@ -141,8 +143,9 @@ iPhoneはSafariの共有メニューから「ホーム画面に追加」、Andro
 - `api/app-data.js` — PC・スマートフォン間のアプリデータ同期
 - `api/gmail-auth.js` / `api/gmail-callback.js` — Gmail読み取り専用OAuth
 - `api/gmail-deadlines.js` — Gmailから締切候補を抽出
-- `api/calendar-auth.js` / `api/calendar-callback.js` — Googleカレンダー読み取り専用OAuth
+- `api/calendar-auth.js` / `api/calendar-callback.js` — GoogleカレンダーOAuth
 - `api/calendar-events.js` — Googleカレンダーから予定を取得
+- `api/calendar-sync.js` — Lady Butlerの予定をGoogleカレンダーへ作成・更新
 - `public/gpt-action-openapi.json` — Custom GPT Actions用のOpenAPI定義
 
 ## 今後追加できる機能
