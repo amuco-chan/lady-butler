@@ -83,6 +83,8 @@ Gmail連携は読み取り専用スコープ `https://www.googleapis.com/auth/gm
 
 Lady Butlerで作った予定は「未反映をGoogleへ反映」からGoogleカレンダーへ作成・更新できます。Googleから取り込んだ予定はLady Butler上では読み取り専用として扱います。Lady Butlerで予定を削除しても、Googleカレンダー側の予定は削除しません。
 
+予定は日付だけでも登録できます。開始時刻だけ分かっていて終了時刻が未定の時は、Lady Butler上では終了時刻を表示せず、Googleカレンダーへ反映する時だけ内部的な仮終了時刻を使います。
+
 初回だけGoogle Cloud側でCalendar APIを有効化し、Gmail連携で使っているOAuth Webクライアントに次のリダイレクトURIを追加します。
 
 `https://lady-butler.vercel.app/api/calendar-callback`

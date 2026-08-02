@@ -53,6 +53,7 @@ export interface CalendarEvent {
   googleCalendarId?: string
   googleSyncedAt?: string
   allDay?: boolean
+  endIsFallback?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -119,6 +120,8 @@ export interface GptInboxEventItem {
   memo: string
   recurrence?: EventRecurrence
   recurrenceUntil?: string
+  allDay?: boolean
+  endIsFallback?: boolean
   sourceText: string
   createdAt: string
   confidence?: 'high' | 'medium' | 'low'

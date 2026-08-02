@@ -187,6 +187,33 @@ assert.equal(importedEvent.title, '美容院')
 assert.equal(importedEvent.location, '駅前')
 assert.match(formatEventTime(importedEvent).time, /15:00/)
 
+const startOnlyEventItems = normalizeGptInboxPayload({
+  sourceText: '8月5日15時に美容院。終わりはわからない',
+  events: [{ title: '美容院', startAt: '2026-08-05T15:00', location: '駅前' }],
+})
+assert.equal(startOnlyEventItems[0].type, 'event')
+assert.equal(startOnlyEventItems[0].startAt, '2026-08-05T15:00')
+assert.equal(startOnlyEventItems[0].endAt, '2026-08-05T16:00')
+assert.equal(startOnlyEventItems[0].endIsFallback, true)
+assert.equal(canAutoAddInboxItem(startOnlyEventItems[0]), true)
+const importedStartOnlyEvent = inboxItemToEvent(startOnlyEventItems[0])
+assert.equal(formatEventTime(importedStartOnlyEvent).time, '15:00')
+
+const dateOnlyEventItems = normalizeGptInboxPayload({
+  sourceText: '8月5日に美容院。時間はまだ決まってない',
+  events: [{ title: '美容院', startAt: '2026-08-05', location: '駅前' }],
+})
+assert.equal(dateOnlyEventItems[0].type, 'event')
+assert.equal(dateOnlyEventItems[0].startAt, '2026-08-05T00:00')
+assert.equal(dateOnlyEventItems[0].endAt, '2026-08-05T23:59')
+assert.equal(dateOnlyEventItems[0].allDay, true)
+assert.equal(dateOnlyEventItems[0].endIsFallback, true)
+assert.equal(dateOnlyEventItems[0].startIsFallback, false)
+assert.equal(canAutoAddInboxItem(dateOnlyEventItems[0]), true)
+const importedDateOnlyEvent = inboxItemToEvent(dateOnlyEventItems[0])
+assert.equal(importedDateOnlyEvent.allDay, true)
+assert.equal(formatEventTime(importedDateOnlyEvent).time, '終日')
+
 const weeklyOccurrences = expandRecurringEvents([{
   ...importedEvent,
   id: 'weekly-event',
@@ -245,6 +272,12 @@ assert.equal(googlePayload.summary, 'ゼミ面談')
 assert.equal(googlePayload.start.dateTime, '2026-07-30T13:00:00+09:00')
 assert.equal(googlePayload.end.dateTime, '2026-07-30T14:00:00+09:00')
 assert.deepEqual(googlePayload.recurrence, ['RRULE:FREQ=WEEKLY;UNTIL=20260831T145959Z'])
+const googleAllDayPayload = appEventToGooglePayload(importedDateOnlyEvent)
+assert.deepEqual(googleAllDayPayload.start, { date: '2026-08-05' })
+assert.deepEqual(googleAllDayPayload.end, { date: '2026-08-06' })
+const googleStartOnlyPayload = appEventToGooglePayload(importedStartOnlyEvent)
+assert.equal(googleStartOnlyPayload.end.dateTime, '2026-08-05T16:00:00+09:00')
+assert.match(googleStartOnlyPayload.description, /終了時刻未定/)
 
 const deadlineWithTime = normalizeGptInboxPayload({
   sourceText: '金曜18時までにレポートを提出する',
@@ -428,6 +461,29 @@ assert.equal(cloudRead.body.items[0].title, 'レポートを提出する')
 const cloudDelete = await callGptInbox({ ids: [directSync.body.items[0].id] }, { method: 'DELETE', headers: { authorization: 'Bearer personal-test-token' } })
 assert.equal(cloudDelete.body.removed, 1)
 
+const directAllDayEvent = await callGptInbox({
+  sourceText: '7月5日に美容院。時間は未定',
+  items: [{ type: 'event', title: '美容院', startAt: '2026-07-05', location: '駅前' }],
+}, { headers: { authorization: 'Bearer gpt-action-test-token' } })
+assert.equal(directAllDayEvent.status, 200)
+assert.equal(directAllDayEvent.body.items[0].type, 'event')
+assert.equal(directAllDayEvent.body.items[0].startAt, '2026-07-05T00:00')
+assert.equal(directAllDayEvent.body.items[0].endAt, '2026-07-05T23:59')
+assert.equal(directAllDayEvent.body.items[0].allDay, true)
+assert.equal(directAllDayEvent.body.items[0].startIsFallback, false)
+await callGptInbox({ ids: [directAllDayEvent.body.items[0].id] }, { method: 'DELETE', headers: { authorization: 'Bearer personal-test-token' } })
+
+const directStartOnlyEvent = await callGptInbox({
+  sourceText: '7月5日15時に美容院。終わりは未定',
+  items: [{ type: 'event', title: '美容院', startAt: '2026-07-05T15:00', location: '駅前' }],
+}, { headers: { authorization: 'Bearer gpt-action-test-token' } })
+assert.equal(directStartOnlyEvent.status, 200)
+assert.equal(directStartOnlyEvent.body.items[0].type, 'event')
+assert.equal(directStartOnlyEvent.body.items[0].startAt, '2026-07-05T15:00')
+assert.equal(directStartOnlyEvent.body.items[0].endAt, '2026-07-05T16:00')
+assert.equal(directStartOnlyEvent.body.items[0].endIsFallback, true)
+await callGptInbox({ ids: [directStartOnlyEvent.body.items[0].id] }, { method: 'DELETE', headers: { authorization: 'Bearer personal-test-token' } })
+
 const unauthorizedSync = await callGptInbox({ items: [{ type: 'task', title: '確認する' }] })
 assert.equal(unauthorizedSync.status, 401)
 const deviceKeyCannotPost = await callGptInbox({ items: [{ type: 'task', title: '確認する' }] }, { headers: { authorization: 'Bearer personal-test-token' } })
@@ -598,7 +654,7 @@ const itemSchema = actionSchema.paths['/api/gpt-inbox'].post.requestBody.content
 assert.deepEqual(itemSchema.required, ['type', 'title'])
 assert.equal(itemSchema.properties.category.enum.includes('予定'), false)
 assert.deepEqual(itemSchema.properties.confidence.enum, ['high', 'medium', 'low'])
-assert.equal(actionSchema.info.version, '2.4.4')
+assert.equal(actionSchema.info.version, '2.4.6')
 assert.deepEqual(actionSchema.components.schemas, {})
 assert.equal(actionSchema.components.securitySchemes.GptActionBearer.scheme, 'bearer')
 assert.equal(actionSchema.paths['/api/gpt-context'].get.operationId, 'getLadyButlerContext')
@@ -617,7 +673,8 @@ assert.ok(actionSchema.paths['/api/gpt-inbox'].post.description.length <= 300)
 const gptInstructions = await readFile(new URL('../public/gpt-instructions.txt', import.meta.url), 'utf8')
 assert.match(gptInstructions, /currentLocalDateTime/)
 assert.match(gptInstructions, /締切がなくても/)
-assert.match(gptInstructions, /開始日と開始時刻/)
+assert.match(gptInstructions, /event は開始日が必要/)
+assert.match(gptInstructions, /仮の終了時刻を表示しません/)
 assert.match(gptInstructions, /参照用データ/)
 assert.match(gptInstructions, /GPT_ACTION_TOKEN/)
 assert.match(gptInstructions, /必ず一文を完結/)

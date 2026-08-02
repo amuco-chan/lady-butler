@@ -3,7 +3,7 @@
   "info": {
     "title": "Lady Butler Personal Context",
     "description": "Read the user's permitted Lady Butler context when it helps, and capture real tasks or calendar plans naturally mentioned in conversation.",
-    "version": "2.4.4"
+    "version": "2.4.6"
   },
   "servers": [
     {
@@ -67,7 +67,7 @@
       "post": {
         "operationId": "sendCandidatesToLadyButler",
         "summary": "Naturally capture tasks and calendar plans in Lady Butler",
-        "description": "Call once for real future tasks or events. Ignore hypotheticals, completed or rejected items, examples, and anything the user says not to record. For relative dates, call getLadyButlerContext first. Tasks may omit deadlines; events require a known date and time.",
+        "description": "Call once for real future tasks or events. Ignore hypotheticals, done/rejected items, examples, and anything the user says not to record. For relative dates, call getLadyButlerContext first. Tasks may omit deadlines. Events need a known date; if time unknown, send YYYY-MM-DD with allDay true.",
         "x-openai-isConsequential": false,
         "security": [{ "GptActionBearer": [] }],
         "requestBody": {
@@ -91,7 +91,7 @@
                         "type": {
                           "type": "string",
                           "enum": ["task", "event"],
-                          "description": "Use task for a completable/checkable action, even if its deadline has a time. Use event only for calendar time with a known start."
+                          "description": "Use task for a completable/checkable action, even if its deadline has a time. Use event for calendar plans with a known date; the time may be unknown if allDay is true."
                         },
                         "title": {
                           "type": "string",
@@ -103,11 +103,19 @@
                         },
                         "startAt": {
                           "type": "string",
-                          "description": "Event only. Required known start date and time in YYYY-MM-DDTHH:mm, such as 2026-06-25T14:00. Never send relative Japanese text or a task deadline here."
+                          "description": "Event only. Use YYYY-MM-DDTHH:mm when the start time is known. If only the date is known and the time is undecided, use YYYY-MM-DD and set allDay true. Never send relative Japanese text or a task deadline here."
                         },
                         "endAt": {
                           "type": "string",
-                          "description": "For event items only. End date/time in ISO-like local format. If unknown, omit it and the app will use about one hour."
+                          "description": "For event items only. End date/time in ISO-like local format. If allDay true, YYYY-MM-DD is also valid. If unknown, omit it; the app will not display a fake end time."
+                        },
+                        "allDay": {
+                          "type": "boolean",
+                          "description": "Event only. Set true when the date is known but the time is unknown, or when the user says 終日."
+                        },
+                        "endIsFallback": {
+                          "type": "boolean",
+                          "description": "Event only. The app may return this as true when endAt was omitted. Do not set it unless you intentionally used a temporary end value."
                         },
                         "location": {
                           "type": "string",
@@ -149,7 +157,7 @@
                         "confidence": {
                           "type": "string",
                           "enum": ["high", "medium", "low"],
-                          "description": "Use high when the type is clear and, for an event, its start date and time are explicit. A task may still be high confidence without a deadline. Use low only for a genuine unresolved ambiguity. Ask one short clarification before sending an event whose start date or time is missing."
+                          "description": "Use high when the type is clear and, for an event, the start date is explicit. A date-only event with allDay true can be high confidence. A task may still be high confidence without a deadline. Use low only for a genuine unresolved ambiguity. Ask one short clarification before sending an event whose start date is missing."
                         },
                         "ambiguities": {
                           "type": "array",
@@ -163,7 +171,7 @@
                   },
                   "events": {
                     "type": "array",
-                    "description": "Compatibility input for calendar events only. Each event must include a known startAt. Ask the user when the start time is unknown; never invent it.",
+                    "description": "Compatibility input for calendar events only. Each event must include a known startAt. Use YYYY-MM-DD when only the date is known and set allDay true. Ask the user when the start date is unknown; never invent it.",
                     "items": {
                       "type": "object",
                       "properties": {
@@ -171,6 +179,7 @@
                         "startAt": { "type": "string" },
                         "endAt": { "type": "string" },
                         "location": { "type": "string" },
+                        "allDay": { "type": "boolean" },
                         "memo": { "type": "string" },
                         "recurrence": { "type": "string", "enum": ["none", "daily", "weekly", "monthly"] },
                         "recurrenceUntil": { "type": "string" }
@@ -211,8 +220,10 @@
                           "deadline": { "type": "string" },
                           "startAt": { "type": "string" },
                           "endAt": { "type": "string" },
+                          "endIsFallback": { "type": "boolean" },
                           "category": { "type": "string" },
-                          "memo": { "type": "string" }
+                          "memo": { "type": "string" },
+                          "allDay": { "type": "boolean" }
                         }
                       }
                     }

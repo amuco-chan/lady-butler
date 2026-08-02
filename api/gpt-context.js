@@ -77,7 +77,7 @@ function contextFrom(envelope) {
   const events = shareTasks ? list(data.events)
     .filter(event => event.recurrence && event.recurrence !== 'none' || new Date(event.endAt || event.startAt).getTime() >= now.getTime() - 3600000)
     .sort((a, b) => new Date(a.startAt).getTime() - new Date(b.startAt).getTime()).slice(0, 30)
-    .map(event => ({ id: shortText(event.id, 100), title: shortText(event.title, 120), startAt: shortText(event.startAt, 30), endAt: shortText(event.endAt, 30), location: shortText(event.location, 200), memo: shortText(event.memo, 500), recurrence: shortText(event.recurrence, 20) || 'none', recurrenceUntil: shortText(event.recurrenceUntil, 20) || null })) : []
+    .map(event => ({ id: shortText(event.id, 100), title: shortText(event.title, 120), startAt: shortText(event.startAt, 30), endAt: shortText(event.endAt, 30), allDay: !!event.allDay, endIsFallback: !!event.endIsFallback, location: shortText(event.location, 200), memo: shortText(event.memo, 500), recurrence: shortText(event.recurrence, 20) || 'none', recurrenceUntil: shortText(event.recurrenceUntil, 20) || null })) : []
 
   const taskWorkLogs = shareTasks ? list(data.taskWorkLogs)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 20)

@@ -126,7 +126,7 @@ export function formatDeadline(value: string, compact = false) {
   return { date, label, urgent: diff <= 1 }
 }
 
-export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt' | 'allDay'>) {
+export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt' | 'allDay' | 'endIsFallback'>) {
   const start = new Date(event.startAt)
   const end = new Date(event.endAt)
   const safeStart = Number.isNaN(start.getTime()) ? new Date() : start
@@ -141,7 +141,7 @@ export function formatEventTime(event: Pick<CalendarEvent, 'startAt' | 'endAt' |
   const sameDay = localDate(safeStart) === localDate(safeEnd)
   return {
     date,
-    time: event.allDay ? '終日' : sameDay ? `${startTime} - ${endTime}` : `${startTime} - ${new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(safeEnd)}`,
+    time: event.allDay ? '終日' : event.endIsFallback ? startTime : sameDay ? `${startTime} - ${endTime}` : `${startTime} - ${new Intl.DateTimeFormat('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(safeEnd)}`,
     label,
     today: diff === 0,
     past: diff < 0,
@@ -452,7 +452,8 @@ export function normalizeEventStart(value: unknown) {
   fallback.setHours(9, 0, 0, 0)
   const text = textOf(value)
   if (!text) return toLocalDateTimeValue(fallback)
-  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return `${text}T09:00`
+  const dateOnly = normalizeDateOnly(text)
+  if (dateOnly) return `${dateOnly}T00:00`
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(text)) return text
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:/.test(text)) {
     const date = new Date(text)
@@ -471,6 +472,13 @@ export function normalizeEventEnd(startAt: string, value: unknown) {
   const end = new Date(normalized)
   if (Number.isNaN(end.getTime()) || end <= start) return toLocalDateTimeValue(fallback)
   return normalized
+}
+
+function normalizeDateOnly(value: unknown) {
+  const text = textOf(value)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return ''
+  const date = new Date(`${text}T00:00:00`)
+  return !Number.isNaN(date.getTime()) && localDate(date) === text ? text : ''
 }
 
 function validIsoLocalDateTime(value: unknown, allowDateOnly = false) {
@@ -538,15 +546,27 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
   if (!title) return []
   const itemSource = textOf(raw.sourceText || raw.source_text) || sourceText
   const rawStart = raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date
+  const rawEnd = raw.endAt || raw.end_at || raw.end || raw.until
   const hasStart = Boolean(textOf(rawStart))
-  const validStart = hasStart && validIsoLocalDateTime(rawStart)
+  const startDateOnly = normalizeDateOnly(rawStart)
+  const explicitAllDay = raw.allDay === true || ['true', '1', 'yes', 'all_day', 'allday', '終日', '時刻未定'].includes(textOf(raw.allDay || raw.all_day).toLowerCase())
+  const validStart = hasStart && (Boolean(startDateOnly) || validIsoLocalDateTime(rawStart))
   const startIsFallback = Boolean(raw.startIsFallback) || !validStart
-  const startAt = validStart ? normalizeEventStart(rawStart) : normalizeEventStart('')
-  const endAt = normalizeEventEnd(startAt, raw.endAt || raw.end_at || raw.end || raw.until)
+  const normalizedStart = validStart ? normalizeEventStart(rawStart) : normalizeEventStart('')
+  const allDay = validStart && (explicitAllDay || Boolean(startDateOnly))
+  const startDate = normalizeDateOnly(startDateOnly) || normalizedStart.slice(0, 10) || localDate()
+  const endDate = normalizeDateOnly(rawEnd) || startDate
+  const startAt = allDay ? `${startDate}T00:00` : normalizedStart
+  const endAt = allDay ? `${endDate}T23:59` : normalizeEventEnd(startAt, rawEnd)
+  const hasEnd = Boolean(textOf(rawEnd))
+  const validEnd = allDay ? !hasEnd || Boolean(normalizeDateOnly(rawEnd)) || validIsoLocalDateTime(rawEnd) : hasEnd && validIsoLocalDateTime(rawEnd)
+  const invalidEnd = hasEnd && (!validEnd || new Date(endAt).getTime() <= new Date(startAt).getTime())
+  const endIsFallback = allDay || !hasEnd || invalidEnd
   const memo = textOf(raw.memo || raw.note || raw.notes || raw.description)
   const ambiguities = [...new Set([
     ...textListOf(raw.ambiguities || raw.needsConfirmation || raw.needs_confirmation),
     ...(startIsFallback ? [hasStart ? '開始日時を確認' : '開始日時未指定'] : []),
+    ...(invalidEnd ? ['終了日時を確認'] : []),
   ])].slice(0, 5)
   return [{
     id: textOf(raw.id) || crypto.randomUUID(),
@@ -558,6 +578,8 @@ function normalizeGptEvent(raw: Record<string, unknown>, sourceText: string, now
     memo: memo || (itemSource ? `GPTより：${itemSource}` : 'GPTから届いた予定候補'),
     recurrence: normalizeRecurrence(raw.recurrence || raw.repeat || raw.frequency),
     recurrenceUntil: textOf(raw.recurrenceUntil || raw.recurrence_until || raw.repeatUntil || raw.repeat_until).slice(0, 10),
+    allDay,
+    endIsFallback,
     sourceText: itemSource,
     createdAt: textOf(raw.createdAt || raw.created_at) || now,
     confidence: confidenceOf(raw.confidence) || (startIsFallback ? 'low' : undefined),
@@ -635,6 +657,8 @@ export function inboxItemToEvent(item: GptInboxEventItem): CalendarEvent {
     memo: item.memo,
     recurrence: item.recurrence || 'none',
     recurrenceUntil: item.recurrenceUntil || '',
+    allDay: !!item.allDay,
+    endIsFallback: !!item.endIsFallback,
     source: 'gpt',
     createdAt: now,
     updatedAt: now,

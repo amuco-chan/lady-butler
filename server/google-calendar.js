@@ -271,10 +271,11 @@ export function appEventToGooglePayload(event) {
   const allDay = !!event?.allDay
   const startDate = datePart(event?.startAt)
   const endDate = datePart(event?.endAt) || startDate
+  const baseDescription = compactText(event?.memo || 'Lady Butlerから反映', 1000)
   const payload = {
     summary: title,
     location: compactText(event?.location || '', 120),
-    description: compactText(event?.memo || 'Lady Butlerから反映', 1000),
+    description: event?.endIsFallback && !allDay ? compactText(`${baseDescription}\n終了時刻未定`, 1000) : baseDescription,
     start: allDay
       ? { date: startDate }
       : { dateTime: googleDateTime(event?.startAt), timeZone: defaultTimeZone },
@@ -312,6 +313,7 @@ export function normalizeAppCalendarEvent(value) {
     googleSyncedAt: text(value?.googleSyncedAt),
     createdAt: text(value?.createdAt) || new Date().toISOString(),
     updatedAt: text(value?.updatedAt) || new Date().toISOString(),
+    endIsFallback: !!value?.endIsFallback,
   }
 }
 
@@ -346,6 +348,7 @@ export function normalizeGoogleCalendarEvent(item, calendar = {}, now = new Date
     googleCalendarId: calendarId,
     googleSyncedAt: now.toISOString(),
     allDay,
+    endIsFallback: false,
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
   }

@@ -63,6 +63,21 @@ function normalizeLocalDateTime(value, allowDateOnly = false) {
   return `${year}-${month}-${day}T${hour}:${minute}`
 }
 
+function addMinutesToLocalDateTime(value, minutes) {
+  const match = text(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/)
+  if (!match) return ''
+  const [, year, month, day, hour, minute] = match
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)))
+  date.setUTCMinutes(date.getUTCMinutes() + minutes)
+  const pad = part => String(part).padStart(2, '0')
+  return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}T${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}`
+}
+
+function isExplicitAllDay(value) {
+  const raw = text(value).toLowerCase()
+  return value === true || ['true', '1', 'yes', 'all_day', 'allday', '終日', '時刻未定'].includes(raw)
+}
+
 function normalizeCategory(value, title) {
   const category = text(value)
   if (allowedCategories.has(category)) return category
@@ -106,8 +121,16 @@ function normalizeEvent(raw, sourceText) {
   if (!title) return null
   const rawStart = text(raw.startAt || raw.start_at || raw.start || raw.dateTime || raw.datetime || raw.when || raw.date)
   const rawEnd = text(raw.endAt || raw.end_at || raw.end || raw.until)
-  const startAt = normalizeLocalDateTime(rawStart)
-  const endAt = normalizeLocalDateTime(rawEnd)
+  const startDateOnly = normalizeDate(rawStart)
+  const explicitAllDay = isExplicitAllDay(raw.allDay || raw.all_day)
+  const allDay = Boolean(startDateOnly) || explicitAllDay
+  const normalizedStart = normalizeLocalDateTime(rawStart)
+  const startDate = startDateOnly || (normalizedStart ? normalizedStart.slice(0, 10) : '')
+  const endDate = normalizeDate(rawEnd) || startDate
+  const startAt = allDay && startDate ? `${startDate}T00:00` : normalizedStart
+  const endAt = allDay && endDate ? `${endDate}T23:59` : rawEnd ? normalizeLocalDateTime(rawEnd) : addMinutesToLocalDateTime(startAt, 60)
+  const hasEnd = Boolean(rawEnd)
+  const endIsFallback = allDay || !hasEnd
   const invalidStart = !!rawStart && !startAt
   const invalidEnd = !!rawEnd && (!endAt || (startAt && endAt <= startAt))
   const startIsFallback = !startAt
@@ -126,6 +149,8 @@ function normalizeEvent(raw, sourceText) {
     memo: shortText(raw.memo || raw.note || raw.notes || raw.description) || 'GPTから届いた予定候補',
     recurrence: allowedRecurrence.has(recurrence) ? recurrence : 'none',
     recurrenceUntil: normalizeDate(raw.recurrenceUntil || raw.recurrence_until || raw.repeatUntil || raw.repeat_until),
+    allDay,
+    endIsFallback: endIsFallback || invalidEnd,
     sourceText: shortText(raw.sourceText || raw.source_text) || sourceText,
     confidence: allowedConfidence.has(text(raw.confidence)) ? text(raw.confidence) : startIsFallback ? 'low' : 'high',
     ambiguities,

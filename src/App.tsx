@@ -25,11 +25,11 @@ const blankEvent = (): CalendarEvent => {
   start.setHours(10, 0, 0, 0)
   const end = new Date(start.getTime() + 60 * 60 * 1000)
   const now = new Date().toISOString()
-  return { id: crypto.randomUUID(), title: '', startAt: toLocalDateTimeValue(start), endAt: toLocalDateTimeValue(end), location: '', memo: '', recurrence: 'none', recurrenceUntil: '', source: 'manual', createdAt: now, updatedAt: now }
+  return { id: crypto.randomUUID(), title: '', startAt: toLocalDateTimeValue(start), endAt: toLocalDateTimeValue(end), location: '', memo: '', recurrence: 'none', recurrenceUntil: '', source: 'manual', endIsFallback: true, createdAt: now, updatedAt: now }
 }
 
-const eventDurationMinutes = (event: Pick<CalendarEvent, 'startAt' | 'endAt' | 'allDay'>) => {
-  if (event.allDay) return 0
+const eventDurationMinutes = (event: Pick<CalendarEvent, 'startAt' | 'endAt' | 'allDay' | 'endIsFallback'>) => {
+  if (event.allDay || event.endIsFallback) return 0
   const start = new Date(event.startAt).getTime(), end = new Date(event.endAt).getTime()
   if (Number.isNaN(start) || Number.isNaN(end) || end <= start) return 0
   return Math.min(24 * 60, Math.round((end - start) / 60000))
@@ -1249,7 +1249,7 @@ function CalendarPage({ events, syncToken, edit, remove, importEvents, updateEve
             : 'Calendar未接続'
   const calendarSetupText = calendarNeeds.length ? `必要な環境変数：${calendarNeeds.join(' / ')}` : 'Google CloudでCalendar APIを有効にし、OAuthのリダイレクトURIを登録します。'
   return <>
-    <PageHeading eyebrow="CALENDAR" title="予定">カレンダーには、授業・バイト・面談・約束など、開始時刻が決まっているものだけを置きます。</PageHeading>
+    <PageHeading eyebrow="CALENDAR" title="予定">カレンダーには、授業・バイト・面談・約束など、日付や開始時刻が決まっているものを置きます。</PageHeading>
     <section className="calendar-hero card">
       <div className="calendar-hero-main"><div className="calendar-orb"><CalendarDays/></div><div><span>SMART SCHEDULE</span><h2>{nextEvent ? `次の予定は「${nextEvent.title}」です。` : 'まだ予定は入っていません。'}</h2><p>{nextEvent ? `${formatEventTime(nextEvent).label}、${formatEventTime(nextEvent).date} ${formatEventTime(nextEvent).time}。必要な準備だけ、先に一つ置いておきましょう。` : 'GPTで「明日14時に美容院」などと話すと、予定候補として受信箱へ届きます。'}</p></div></div>
       <div className="calendar-hero-stats"><div><strong>{todayCount}</strong><span>今日の予定</span></div><div><strong>{upcoming.length}</strong><span>今後の予定</span></div></div>
@@ -1482,28 +1482,62 @@ function SettingsPage({ settings, setSettings, syncToken, setSyncToken, syncStat
 function EventModal({ event: initial, save, close, notice: _notice }: { event: CalendarEvent; save:(event:CalendarEvent)=>void; close:()=>void; notice?: string[] }) {
   const [event,setEvent]=useState(initial)
   const datePart = (value: string) => value?.slice(0, 10) || localDate()
-  const timePart = (value: string) => value?.slice(11, 16) || '10:00'
-  const merge = (date: string, time: string) => `${date || localDate()}T${time || '10:00'}`
+  const timePart = (value: string) => value?.slice(11, 16) || ''
+  const withTime = (date: string, time: string, fallback = '10:00') => `${date || localDate()}T${time || fallback}`
+  const dayStart = (date: string) => `${date || localDate()}T00:00`
+  const dayEnd = (date: string) => `${date || localDate()}T23:59`
+  const fallbackEnd = (startAt: string) => {
+    const start = new Date(startAt)
+    return toLocalDateTimeValue(new Date((Number.isNaN(start.getTime()) ? Date.now() : start.getTime()) + 60 * 60 * 1000))
+  }
   const update=(k:keyof CalendarEvent,v:string)=>setEvent(p=>({...p,[k]:v}))
+  const setAllDay = (checked: boolean) => setEvent(p => {
+    const startDate = datePart(p.startAt)
+    const endDate = datePart(p.endAt) || startDate
+    return checked
+      ? {...p, allDay: true, endIsFallback: true, startAt: dayStart(startDate), endAt: dayEnd(endDate)}
+      : {...p, allDay: false, endIsFallback: true, startAt: withTime(startDate, '', '10:00'), endAt: withTime(startDate, '', '11:00')}
+  })
   const updateStart=(part:'date'|'time',value:string)=>setEvent(p=>{
+    const startDate = part === 'date' ? value : datePart(p.startAt)
+    if (p.allDay) {
+      if (part === 'time' && value) {
+        const startAt = withTime(startDate, value)
+        return {...p, allDay: false, endIsFallback: true, startAt, endAt: fallbackEnd(startAt)}
+      }
+      return {...p, endIsFallback: true, startAt: dayStart(startDate), endAt: dayEnd(part === 'date' ? startDate : datePart(p.endAt))}
+    }
+    if (part === 'time' && !value) return {...p, allDay: true, endIsFallback: true, startAt: dayStart(startDate), endAt: dayEnd(datePart(p.endAt) || startDate)}
     const oldStart = new Date(p.startAt), oldEnd = new Date(p.endAt)
-    const duration = !Number.isNaN(oldStart.getTime()) && !Number.isNaN(oldEnd.getTime()) && oldEnd > oldStart ? oldEnd.getTime() - oldStart.getTime() : 60 * 60 * 1000
-    const startAt = merge(part === 'date' ? value : datePart(p.startAt), part === 'time' ? value : timePart(p.startAt))
+    const duration = !p.endIsFallback && !Number.isNaN(oldStart.getTime()) && !Number.isNaN(oldEnd.getTime()) && oldEnd > oldStart ? oldEnd.getTime() - oldStart.getTime() : 60 * 60 * 1000
+    const startAt = withTime(startDate, part === 'time' ? value : timePart(p.startAt))
     const nextStart = new Date(startAt)
     const endAt = Number.isNaN(nextStart.getTime()) ? p.endAt : toLocalDateTimeValue(new Date(nextStart.getTime() + duration))
-    return {...p,startAt,endAt}
+    return {...p, allDay: false, startAt, endAt, endIsFallback: !!p.endIsFallback}
   })
-  const updateEnd=(part:'date'|'time',value:string)=>setEvent(p=>({...p,endAt:merge(part === 'date' ? value : datePart(p.endAt), part === 'time' ? value : timePart(p.endAt))}))
+  const updateEnd=(part:'date'|'time',value:string)=>setEvent(p=>{
+    const endDate = part === 'date' ? value : datePart(p.endAt)
+    if (p.allDay) return {...p, endIsFallback: true, endAt: dayEnd(endDate)}
+    if (part === 'time' && !value) return {...p, allDay: false, endIsFallback: true, endAt: fallbackEnd(p.startAt)}
+    return {...p, allDay: false, endIsFallback: false, endAt: withTime(endDate, part === 'time' ? value : timePart(p.endAt), '11:00')}
+  })
   const submit=(e:React.FormEvent)=>{
     e.preventDefault()
     if(!event.title.trim()) return
+    if (event.allDay) {
+      const startDate = datePart(event.startAt)
+      const endDate = datePart(event.endAt) || startDate
+      save({...event, allDay: true, endIsFallback: true, startAt: dayStart(startDate), endAt: dayEnd(endDate)})
+      return
+    }
     const start = new Date(event.startAt), end = new Date(event.endAt)
-    const fixedStart = Number.isNaN(start.getTime()) ? toLocalDateTimeValue(new Date()) : event.startAt
+    const fixedStart = Number.isNaN(start.getTime()) ? withTime(localDate(), '', '10:00') : event.startAt
     const safeStart = new Date(fixedStart)
-    const fixedEnd = Number.isNaN(end.getTime()) || end <= safeStart ? toLocalDateTimeValue(new Date(safeStart.getTime() + 60 * 60 * 1000)) : event.endAt
-    save({...event,startAt:fixedStart,endAt:fixedEnd})
+    const endNeedsFallback = event.endIsFallback || Number.isNaN(end.getTime()) || end <= safeStart
+    const fixedEnd = endNeedsFallback ? fallbackEnd(fixedStart) : event.endAt
+    save({...event, allDay: false, endIsFallback: endNeedsFallback, startAt: fixedStart, endAt: fixedEnd})
   }
-  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2><p className="modal-help">授業・バイト・面談など、開始時刻と終了時刻があるものです。提出物や買い物は「やること」に入れましょう。</p></div><button type="button" onClick={close} aria-label="予定の編集を閉じる" title="閉じる"><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid event-date-grid"><Field label="開始日"><input type="date" value={datePart(event.startAt)} onChange={e=>updateStart('date',e.target.value)}/></Field><Field label="開始時刻"><input type="time" value={timePart(event.startAt)} onChange={e=>updateStart('time',e.target.value)}/></Field><Field label="終了日"><input type="date" value={datePart(event.endAt)} onChange={e=>updateEnd('date',e.target.value)}/></Field><Field label="終了時刻"><input type="time" value={timePart(event.endAt)} onChange={e=>updateEnd('time',e.target.value)}/></Field><Field label="繰り返し"><select value={event.recurrence || 'none'} onChange={e=>setEvent(previous => ({...previous, recurrence: e.target.value as CalendarEvent['recurrence']}))}><option value="none">繰り返さない</option><option value="daily">毎日</option><option value="weekly">毎週</option><option value="monthly">毎月</option></select></Field>{event.recurrence && event.recurrence !== 'none' ? <Field label="繰り返し終了"><input type="date" min={datePart(event.startAt)} value={event.recurrenceUntil || ''} onChange={e=>update('recurrenceUntil',e.target.value)}/></Field> : <div/>}<Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><form className="modal" onSubmit={submit}><div className="modal-head"><div><span>EVENT DETAILS</span><h2>{initial.title?'予定を編集':'新しい予定'}</h2><p className="modal-help">開始時刻だけでも保存できます。終了時刻が未定なら空欄のままで大丈夫です。時刻自体が未定なら「時刻未定・終日として入れる」を使いましょう。</p></div><button type="button" onClick={close} aria-label="予定の編集を閉じる" title="閉じる"><X/></button></div><div className="modal-body"><Field label="予定名" required><input autoFocus value={event.title} onChange={e=>update('title',e.target.value)} placeholder="例：ゼミ面談、美容院、バイト"/></Field><div className="form-grid event-date-grid"><label className="toggle-row event-all-day-toggle"><input type="checkbox" checked={!!event.allDay} onChange={e=>setAllDay(e.target.checked)}/><span>時刻未定・終日として入れる</span></label><Field label="開始日"><input type="date" value={datePart(event.startAt)} onChange={e=>updateStart('date',e.target.value)}/></Field><Field label="開始時刻"><input type="time" value={event.allDay ? '' : timePart(event.startAt)} onChange={e=>updateStart('time',e.target.value)} disabled={!!event.allDay} placeholder="未定なら空欄"/></Field><Field label="終了日"><input type="date" value={datePart(event.endAt)} onChange={e=>updateEnd('date',e.target.value)}/></Field><Field label="終了時刻"><input type="time" value={event.allDay || event.endIsFallback ? '' : timePart(event.endAt)} onChange={e=>updateEnd('time',e.target.value)} disabled={!!event.allDay} placeholder="未定なら空欄"/></Field><Field label="繰り返し"><select value={event.recurrence || 'none'} onChange={e=>setEvent(previous => ({...previous, recurrence: e.target.value as CalendarEvent['recurrence']}))}><option value="none">繰り返さない</option><option value="daily">毎日</option><option value="weekly">毎週</option><option value="monthly">毎月</option></select></Field>{event.recurrence && event.recurrence !== 'none' ? <Field label="繰り返し終了"><input type="date" min={datePart(event.startAt)} value={event.recurrenceUntil || ''} onChange={e=>update('recurrenceUntil',e.target.value)}/></Field> : <div/>}<Field label="場所" wide><input value={event.location} onChange={e=>update('location',e.target.value)} placeholder="例：研究室、駅前、オンライン"/></Field><Field label="メモ" wide><textarea value={event.memo} onChange={e=>update('memo',e.target.value)} placeholder="持ち物、待ち合わせ相手、準備など"/></Field></div></div><div className="modal-actions"><button type="button" onClick={close}>キャンセル</button><button className="primary" disabled={!event.title.trim()}><Check size={17}/>保存する</button></div></form></div>
 }
 
 function TaskModal({ task: initial, save, close, notice: _notice }: { task: Task; save:(t:Task)=>void; close:()=>void; notice?: string[] }) {
